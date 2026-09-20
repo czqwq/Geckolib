@@ -118,17 +118,7 @@ Each of these is a deliberate, commented degradation rather than a guess:
 ```
 .\gradlew.bat build        # compile + tests + jar
 .\gradlew.bat runClient
-```
-
-While iterating on Java only, `tools/jcheck.ps1` compiles the whole source tree against the project's real
-classpath in a few seconds and writes `tmp/_analysis/javac.log`:
-
-```
-pwsh -NoProfile -File tools/jcheck.ps1
-```
-
-(It exists because the Gradle round trip is several minutes; keep it if it is useful, ignore it otherwise. The
-`tools/` and `tmp/` directories are git-ignored.)
+``` 
 
 ## License
 
