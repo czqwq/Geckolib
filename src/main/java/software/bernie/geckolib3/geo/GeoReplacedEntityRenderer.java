@@ -171,7 +171,11 @@ public abstract class GeoReplacedEntityRenderer<T extends IAnimatable> extends R
                     (float) renderColor.getBlue() / 255f,
                     (float) renderColor.getAlpha() / 255);
 
-                if (entity instanceof EntityPlayer) {
+                // 附加层（手持物、护甲等）不再只对玩家开放：穿 YSM 模型的女仆不是 EntityPlayer，但同样需要
+                // 把物品挂在她自己的骨骼上画出来。因此这里放宽到任何 EntityLivingBase。
+                // 安全跳过条件：这一帧必须同时有 animatable 和可用的 geoModel。缺任一项时层没有骨架可挂
+                // （取骨骼或贴图时会 NPE），所以宁可不画；层自身也应各自检查自己的 geoModel 是否可用。
+                if (animatable != null && model != null) {
                     for (GeoLayerRenderer layerRenderer : this.layerRenderers) {
                         layerRenderer.render(entity, limbSwing, limbSwingAmount, partialTicks, f7, netHeadYaw,
                             headPitch, renderColor);
