@@ -1,6 +1,7 @@
 package com.eliotlash.mclib.math.functions;
 
 import com.eliotlash.mclib.math.IValue;
+import software.bernie.geckolib3.core.molang.MolangStringPool;
 
 public abstract class Function implements IValue {
 
@@ -28,6 +29,28 @@ public abstract class Function implements IValue {
             return 0;
         }
         return this.args[index].get();
+    }
+
+    /**
+     * The text of argument {@code index} when the call site wrote a string literal ({@code 'text'}), or {@code null}
+     * for a missing argument or the empty id.
+     * <p>
+     * {@code MolangParser#breakdown} replaces every string literal with its {@link MolangStringPool} id before the
+     * expression is parsed, so a literal arrives here as a number and this turns it back into text - the same way
+     * {@code MolangPhysicsRuntime} recovers a bone name. A numeric argument that happens to equal a pooled id is
+     * therefore indistinguishable from a literal; packs only use literals where a name is expected, and id
+     * {@code 0} (empty) never resolves.
+     */
+    public String getStringArg(int index) {
+        if (index < 0 || index >= this.args.length) {
+            return null;
+        }
+        return MolangStringPool.get((int) this.args[index].get());
+    }
+
+    /** Number of arguments the call site passed, so a function can implement optional parameters. */
+    public int getArgumentCount() {
+        return this.args == null ? 0 : this.args.length;
     }
 
     @Override

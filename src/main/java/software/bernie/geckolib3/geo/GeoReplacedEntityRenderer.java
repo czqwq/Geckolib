@@ -189,6 +189,9 @@ public abstract class GeoReplacedEntityRenderer<T extends IAnimatable> extends R
                 }
                 RenderHurtColor.render(this, model, entity, entity, partialTicks);
             } catch (Exception e) {
+                // Report instead of swallowing: a failure here leaves the entity with no GeckoLib frame at all, and
+                // the debug flag alone used to make that indistinguishable from an empty model.
+                reportRenderFailure("entity " + entity + " with model " + model, e);
                 if (ConfigHandler.debugPrintStacktraces) {
                     e.printStackTrace();
                 }
@@ -196,6 +199,7 @@ public abstract class GeoReplacedEntityRenderer<T extends IAnimatable> extends R
                 GlStateManager.popMatrix();
             }
         } catch (Exception e) {
+            reportRenderFailure("entity " + entity, e);
             if (ConfigHandler.debugPrintStacktraces) {
                 e.printStackTrace();
             }

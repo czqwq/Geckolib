@@ -83,8 +83,9 @@ public class MathBuilder {
      * 分解表达式
      */
     public String[] breakdown(String expression) throws Exception {
-        // 如果给定的字符串包含非法字符，则无法解析
-        if (!expression.matches("^[\\w\\d\\s_+-/*%^&|<>=!?:.,()]+$")) {
+        // 如果给定的字符串包含非法字符，则无法解析。方括号是 args[i] 需要的语法。
+        // 字符串字面量在 MolangParser#breakdown 里已经被替换成字符串池 id，不需要在这里放行引号。
+        if (!expression.matches("^[\\w\\d\\s_+-/*%^&|<>=!?:.,()\\[\\]]+$")) {
             throw new Exception("Given expression '" + expression + "' contains illegal characters!");
         }
         // 删除所有空格以及前导和尾随括号
@@ -122,6 +123,14 @@ public class MathBuilder {
         for (int i = 0; i < len; i++) {
             String s = chars[i];
             boolean longOperator = i > 0 && this.isOperator(chars[i - 1] + s);
+            // 双字符运算符（== != <= >= && ||）的第一个字符也可能自己就是一个完整运算符：'=' 就是
+            // （Operation.ASSIGN）。那样它在上一轮已经被单独入栈，这一轮的长运算符分支会拿空 buffer 去
+            // 做 substring(0, -1)，于是 `a==b` 直接抛 StringIndexOutOfBoundsException —— 旧解析器因此
+            // 完全无法解析相等比较。把这一位先放进 buffer，下一次迭代自然会认出两位运算符。
+            if (!longOperator && i + 1 < len && this.isOperator(s + chars[i + 1])) {
+                buffer += s;
+                continue;
+            }
             if (this.isOperator(s) || longOperator || ",".equals(s)) {
                 // 使用负号翻转数值的用法判定
                 if ("-".equals(s)) {
@@ -167,6 +176,29 @@ public class MathBuilder {
                         buffer += c;
                     }
                 }
+            } else if ("[".equals(s)) {
+                // args[i]：把下标整段收成一个 Access 标记，交给 parseSymbols 决定它属于哪个名字
+                if (!buffer.isEmpty()) {
+                    symbols.add(buffer);
+                    buffer = "";
+                }
+                StringBuilder inner = new StringBuilder();
+                int counter = 1;
+                for (int j = i + 1; j < len; j++) {
+                    String c = chars[j];
+                    if ("[".equals(c)) {
+                        counter++;
+                    } else if ("]".equals(c)) {
+                        counter--;
+                    }
+                    if (counter == 0) {
+                        symbols.add(new IndexValue.Access(this.breakdownChars(inner.toString().split("(?!^)"))));
+                        i = j;
+                        inner.setLength(0);
+                        break;
+                    }
+                    inner.append(c);
+                }
             } else {
                 buffer += s;
             }
@@ -201,6 +233,9 @@ public class MathBuilder {
         if (size == 2) {
             Object first = symbols.get(0);
             Object second = symbols.get(1);
+            if (second instanceof IndexValue.Access && first instanceof String) {
+                return new IndexValue((String) first, this.parseSymbols(((IndexValue.Access) second).symbols));
+            }
             if ((this.isVariable(first) || "-".equals(first)) && second instanceof List) {
                 return this.createFunction((String) first, (List<Object>) second);
             }
@@ -320,9 +355,6 @@ public class MathBuilder {
         if (first.startsWith("-") && first.length() > 1) {
             return new Negative(this.createFunction(first.substring(1), args));
         }
-        if (!this.functions.containsKey(first)) {
-            throw new Exception("Function '" + first + "' couldn't be found!");
-        }
         List<IValue> values = new ArrayList<>();
         List<Object> buffer = new ArrayList<>();
         for (Object o : args) {
@@ -337,9 +369,37 @@ public class MathBuilder {
             values.add(this.parseSymbols(buffer));
         }
         Class<? extends Function> function = this.functions.get(first);
+        if (function == null) {
+            // 没有静态注册的名字交给宿主解析（pack 的 fn.<name> 就是按模型动态决定函数体的）
+            if (this.functionResolver != null) {
+                IValue resolved = this.functionResolver.resolve(first, values);
+                if (resolved != null) {
+                    return resolved;
+                }
+            }
+            throw new Exception("Function '" + first + "' couldn't be found!");
+        }
         Constructor<? extends Function> constructor = function.getConstructor(IValue[].class, String.class);
         return constructor.newInstance(values.toArray(new IValue[0]), first);
     }
+
+    /**
+     * 动态函数解析：静态 {@link #functions} 表里没有的名字交给它，返回 {@code null} 表示确实不存在。
+     * <p>
+     * 存在的意义是 OpenYSM 的 pack 函数（{@code functions/*.molang}）：{@code fn.<name>} 的函数体随模型而定，
+     * 无法在解析器上静态注册一个类。宿主在解析阶段返回一个惰性 {@link IValue}，求值时再按当前模型取函数体。
+     */
+    public interface FunctionResolver {
+
+        IValue resolve(String name, List<IValue> arguments) throws Exception;
+    }
+
+    /** Installs (or clears, with {@code null}) the dynamic function resolver. */
+    public void setFunctionResolver(FunctionResolver resolver) {
+        this.functionResolver = resolver;
+    }
+
+    private FunctionResolver functionResolver;
 
     /**
      * 从对象中获取值

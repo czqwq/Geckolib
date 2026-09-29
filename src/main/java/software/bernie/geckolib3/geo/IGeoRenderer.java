@@ -1,6 +1,8 @@
 package software.bernie.geckolib3.geo;
 
 import java.util.ArrayList;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.annotation.Nullable;
 import javax.vecmath.Vector3f;
@@ -13,6 +15,7 @@ import net.minecraft.util.ResourceLocation;
 import org.lwjgl.opengl.GL11;
 
 import software.bernie.example.config.ConfigHandler;
+import software.bernie.geckolib3.GeckoLib;
 import software.bernie.geckolib3.core.util.Color;
 import software.bernie.geckolib3.geo.render.built.GeoBone;
 import software.bernie.geckolib3.geo.render.built.GeoCube;
@@ -25,6 +28,40 @@ import software.bernie.geckolib3.util.MatrixStack;
 public interface IGeoRenderer<T> {
 
     public static MatrixStack MATRIX_STACK = new MatrixStack();
+
+    /**
+     * Render failures already reported, so one broken model cannot flood the log.
+     */
+    Set<String> REPORTED_RENDER_FAILURES = ConcurrentHashMap.newKeySet();
+
+    int MAX_REPORTED_RENDER_FAILURES = 24;
+
+    /**
+     * Reports geometry that could not be drawn.
+     * <p>
+     * A cube that threw used to be skipped in complete silence unless {@code debugStacktraces} was on, which makes
+     * "the model is not on screen" indistinguishable from "the model drew nothing at all". Announcing the cause once
+     * per distinct failure is what turns it back into a diagnosable event; the cap keeps a broken pack from filling
+     * the log. The full stack trace still needs the config flag.
+     *
+     * @param where what was being drawn, for example {@code "cube #3 of bone LeftLeg"}
+     */
+    default void reportRenderFailure(String where, Throwable failure) {
+        String key = where + " | " + failure.getClass()
+            .getName() + " | " + failure.getMessage();
+        if (REPORTED_RENDER_FAILURES.size() >= MAX_REPORTED_RENDER_FAILURES
+            || !REPORTED_RENDER_FAILURES.add(key)) {
+            return;
+        }
+        GeckoLib.LOG.warn(
+            "GeckoLib: could not draw {} ({}); that geometry is skipped. Set general.debugStacktraces=true in the"
+                + " GeckoLib config for the full stack trace, and report which model pack shows this.",
+            where,
+            failure.toString());
+        if (ConfigHandler.debugPrintStacktraces) {
+            failure.printStackTrace();
+        }
+    }
 
     default void render(GeoModel model, T animatable, float partialTicks, float red, float green, float blue,
         float alpha) {
@@ -66,41 +103,47 @@ public interface IGeoRenderer<T> {
         float alpha) {
         MATRIX_STACK.push();
 
-        MATRIX_STACK.translate(bone);
-        MATRIX_STACK.moveToPivot(bone);
-        MATRIX_STACK.rotate(bone);
-        MATRIX_STACK.scale(bone);
-        MATRIX_STACK.moveBackFromPivot(bone);
+        // The body runs in a try/finally so the shared matrix stack is popped on every path. It used to be popped
+        // only on the normal path, so one escaping exception leaked a frame for the rest of the session and every
+        // later model could then fail its own pop (silently, through the callers' catch blocks).
+        try {
+            MATRIX_STACK.translate(bone);
+            MATRIX_STACK.moveToPivot(bone);
+            MATRIX_STACK.rotate(bone);
+            MATRIX_STACK.scale(bone);
+            MATRIX_STACK.moveBackFromPivot(bone);
 
-        if (isBoneRenderOverriden(animatable, bone)) {
-            drawOverridenBone(animatable, bone);
-            MATRIX_STACK.pop();
-            return;
-        }
+            if (isBoneRenderOverriden(animatable, bone)) {
+                drawOverridenBone(animatable, bone);
+                return;
+            }
 
-        if (!bone.isHidden()) {
-            for (GeoCube cube : bone.childCubes) {
-                MATRIX_STACK.push();
-                GlStateManager.pushMatrix();
-                try {
-                    renderCube(builder, cube, red, green, blue, alpha);
-                } catch (Exception e) {
-                    if (ConfigHandler.debugPrintStacktraces) {
-                        e.printStackTrace();
+            if (!bone.isHidden()) {
+                int cubeIndex = -1;
+                for (GeoCube cube : bone.childCubes) {
+                    cubeIndex++;
+                    MATRIX_STACK.push();
+                    GlStateManager.pushMatrix();
+                    try {
+                        renderCube(builder, cube, red, green, blue, alpha);
+                    } catch (Exception e) {
+                        reportRenderFailure("cube #" + cubeIndex + " of bone " + bone.getName(), e);
+                    } finally {
+                        GlStateManager.popMatrix();
+                        MATRIX_STACK.pop();
                     }
-                } finally {
-                    GlStateManager.popMatrix();
-                    MATRIX_STACK.pop();
                 }
             }
-        }
-        if (!bone.childBonesAreHiddenToo()) {
-            for (GeoBone childBone : bone.childBones) {
-                renderRecursively(builder, animatable, childBone, red, green, blue, alpha);
+            if (!bone.childBonesAreHiddenToo()) {
+                for (GeoBone childBone : bone.childBones) {
+                    renderRecursively(builder, animatable, childBone, red, green, blue, alpha);
+                }
             }
+        } catch (Exception e) {
+            reportRenderFailure("bone " + bone.getName(), e);
+        } finally {
+            MATRIX_STACK.pop();
         }
-
-        MATRIX_STACK.pop();
     }
 
     default void renderCube(Tessellator builder, GeoCube cube, float red, float green, float blue, float alpha) {

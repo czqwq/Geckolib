@@ -124,6 +124,21 @@ public enum Operation {
         public double calculate(double a, double b) {
             return b;
         }
+    },
+    /**
+     * Bedrock's null-coalescing {@code a ?? b}: use the left operand, or the right one when the left is undefined.
+     * <p>
+     * The numeric evaluator has no notion of "undefined", so an unset variable - which reads as 0 - takes the
+     * fallback. Model packs rely on it for exactly that: {@code "scale": "v.player_size??1"} must scale by 1 until
+     * the player picks a size. Without the operator the whole expression failed to tokenise (the two '?' characters
+     * stayed in the buffer and the result was an empty symbol), the scale channel evaluated to 0 and the model
+     * collapsed to a point. Precedence is below every other binary operator so the fallback applies last.
+     */
+    NULL_COALESCE("??", 4) {
+        @Override
+        public double calculate(double a, double b) {
+            return a != 0 ? a : b;
+        }
     };
 
     public final static Set<String> OPERATORS = new HashSet<String>();

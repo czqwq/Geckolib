@@ -3,16 +3,22 @@ package software.bernie.geckolib3.core.molang;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.DoubleSupplier;
+
+import org.apache.logging.log4j.Logger;
 
 import com.eliotlash.mclib.math.Constant;
 import com.eliotlash.mclib.math.IValue;
 import com.eliotlash.mclib.math.MathBuilder;
 import com.eliotlash.mclib.math.Variable;
+import com.eliotlash.mclib.math.functions.Function;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import software.bernie.geckolib3.GeckoLib;
 import software.bernie.geckolib3.core.molang.expressions.MolangAssignment;
 import software.bernie.geckolib3.core.molang.expressions.MolangExpression;
 import software.bernie.geckolib3.core.molang.expressions.MolangMultiStatement;
@@ -35,6 +41,10 @@ public class MolangParser extends MathBuilder {
     public static final MolangExpression ZERO = new MolangValue(null, new Constant(0));
     public static final MolangExpression ONE = new MolangValue(null, new Constant(1));
     public static final String RETURN = "return ";
+
+    private static final Logger LOG = GeckoLib.LOG;
+    /** 已经报告过的解析失败原因，同一个原因（例如同一个未注册函数）之后不再刷日志。 */
+    private static final Set<String> REPORTED_PARSE_FAILURES = ConcurrentHashMap.newKeySet();
 
     public MolangParser() {
         super();
@@ -69,25 +79,27 @@ public class MolangParser extends MathBuilder {
         remap("ceil", "math.ceil");
         remap("clamp", "math.clamp");
         remap("cos", "math.cos");
-        remap("die_roll", "math.die_roll");
-        remap("die_roll_integer", "math.die_roll_integer");
         remap("exp", "math.exp");
         remap("floor", "math.floor");
-        remap("hermite_blend", "math.hermite_blend");
         remap("lerp", "math.lerp");
         remap("lerprotate", "math.lerprotate");
         remap("ln", "math.ln");
         remap("max", "math.max");
         remap("min", "math.min");
         remap("mod", "math.mod");
-        remap("pi", "math.pi");
         remap("pow", "math.pow");
         remap("random", "math.random");
-        remap("random_integer", "math.random_integer");
+        // 源名必须是真正注册过的名字：MathBuilder 里是 randomi/roll/rolli/hermite
+        remap("randomi", "math.random_integer");
         remap("round", "math.round");
         remap("sin", "math.sin");
         remap("sqrt", "math.sqrt");
         remap("trunc", "math.trunc");
+        remap("roll", "math.die_roll");
+        remap("rolli", "math.die_roll_integer");
+        remap("hermite", "math.hermite_blend");
+        // math.pi 是常量而不是函数（原来把它 remap 成函数只会留下一个空类）
+        register(new Variable("math.pi", Math.PI));
     }
 
     @Override
@@ -105,10 +117,28 @@ public class MolangParser extends MathBuilder {
     }
 
     /**
-     * 重映射方法
+     * 重映射方法：把 {@code old} 注册的函数改到 Bedrock 的 {@code math.*} 名字下。
+     * <p>
+     * 源名不存在时**不写入**：此前的 {@code functions.put(newName, remove(old))} 会把 {@code null} 放进表里，
+     * 于是 {@code math.random_integer} 这类名字能"查到"却拿到空类，最终表现为
+     * "Function 'math.random_integer' couldn't be found!"。源名写错（注册的是 {@code randomi}/{@code roll}/
+     * {@code rolli}/{@code hermite}）就正是这样发生的。
      */
     public void remap(String old, String newName) {
-        this.functions.put(newName, this.functions.remove(old));
+        Class<? extends Function> function = this.functions.remove(old);
+        if (function != null) {
+            this.functions.put(newName, function);
+        }
+    }
+
+    /**
+     * 函数名同样接受 {@code q.} 前缀：{@code normalizeVariableName} 早就把变量里的 {@code q.} 归一成
+     * {@code query.}，但函数查表用的是原样字符串，于是宿主注册的 {@code query.position} 对
+     * {@code q.position(...)} 不可见（模型包里两种写法都有）。
+     */
+    @Override
+    protected IValue createFunction(String first, List<Object> args) throws Exception {
+        return super.createFunction(normalizeVariableName(first), args);
     }
 
     @Deprecated
@@ -279,9 +309,27 @@ public class MolangParser extends MathBuilder {
         try {
             return this.parseSymbols(symbols);
         } catch (Exception e) {
-            e.printStackTrace();
+            reportParseFailure(e);
             throw new MolangException("Couldn't parse an expression!");
         }
+    }
+
+    /**
+     * 解析失败的诊断：同一个原因只报一次，且不再往 stderr 打整条栈。
+     * <p>
+     * 模型包是第三方数据，一个未注册的函数就会让整条表达式解析失败。这条路径以前对**每一次**失败调用
+     * {@code printStackTrace()}：Wine Fox &amp; Friends 一个包就因为 {@code query.position} 等名字失败 79 次、
+     * 每次 12 行栈，单次会话刷出 3985 行 STDERR。表达式仍然失败（语义不变），但原因只记一行；栈降级为 debug，
+     * 并且同样只在该原因第一次出现时输出。
+     */
+    private static void reportParseFailure(Exception failure) {
+        String reason = failure.getMessage() == null ? failure.getClass()
+            .getName() : failure.getMessage();
+        if (!REPORTED_PARSE_FAILURES.add(reason)) {
+            return;
+        }
+        LOG.warn("Molang expression could not be parsed: {} (reported once per distinct reason)", reason);
+        LOG.debug("Molang parse failure detail", failure);
     }
 
     /**
@@ -291,7 +339,7 @@ public class MolangParser extends MathBuilder {
     @Override
 
     protected boolean isOperator(String s) {
-        return super.isOperator(s) || s.equals("=");
+        return super.isOperator(s) || s.equals("=") || s.equals("??");
     }
 
     private static String lowerCaseOutsideStrings(String expression) {
