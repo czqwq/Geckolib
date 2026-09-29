@@ -100,9 +100,12 @@ public class GeoCube implements Serializable {
         Boolean mirror) {
         GeoCube cube = new GeoCube(cubeIn.getSize());
 
+        // Model packs are third-party data and a cube may omit "uv" entirely (or carry "uv": null). Everything
+        // below treats missing face data as "no quad" and IGeoRenderer already skips null quads, so degrade
+        // instead of throwing an NPE that would make the whole model silently disappear.
         UvUnion uvUnion = cubeIn.getUv();
-        UvFaces faces = uvUnion.faceUV;
-        boolean isBoxUV = uvUnion.isBoxUV;
+        UvFaces faces = uvUnion == null ? null : uvUnion.faceUV;
+        boolean isBoxUV = uvUnion == null || uvUnion.isBoxUV;
         cube.mirror = cubeIn.getMirror();
         cube.inflate = cubeIn.getInflate() == null ? (boneInflate == null ? 0 : boneInflate) : cubeIn.getInflate() / 16;
 
@@ -110,10 +113,14 @@ public class GeoCube implements Serializable {
             cube.inflate = 0.001;
         }
 
-        float textureHeight = properties.getTextureHeight()
-            .floatValue();
-        float textureWidth = properties.getTextureWidth()
-            .floatValue();
+        // A missing description means no declared texture size. The poly-mesh path in this same class already
+        // defaults to 64F for exactly this case; match that instead of dereferencing null.
+        float textureHeight = properties == null || properties.getTextureHeight() == null ? 64F
+            : properties.getTextureHeight()
+                .floatValue();
+        float textureWidth = properties == null || properties.getTextureWidth() == null ? 64F
+            : properties.getTextureWidth()
+                .floatValue();
 
         Vector3d size = VectorUtils.fromArray(cubeIn.getSize());
         Vector3d origin = VectorUtils.fromArray(cubeIn.getOrigin());
@@ -206,12 +213,12 @@ public class GeoCube implements Serializable {
         GeoQuad quadDown;
 
         if (!isBoxUV) {
-            FaceUv west = faces.getWest();
-            FaceUv east = faces.getEast();
-            FaceUv north = faces.getNorth();
-            FaceUv south = faces.getSouth();
-            FaceUv up = faces.getUp();
-            FaceUv down = faces.getDown();
+            FaceUv west = faces == null ? null : faces.getWest();
+            FaceUv east = faces == null ? null : faces.getEast();
+            FaceUv north = faces == null ? null : faces.getNorth();
+            FaceUv south = faces == null ? null : faces.getSouth();
+            FaceUv up = faces == null ? null : faces.getUp();
+            FaceUv down = faces == null ? null : faces.getDown();
             // Pass in vertices starting from the top right corner, then going
             // counter-clockwise
             quadWest = west == null ? null
@@ -349,8 +356,17 @@ public class GeoCube implements Serializable {
                         cubeIn.getMirror(),
                         EnumFacing.DOWN);
             }
+        } else if (uvUnion == null || uvUnion.boxUVCoords == null) {
+            // Box UV was requested but the cube carries no box UV coordinates at all. Leave the six quads null;
+            // IGeoRenderer skips null quads, so the cube is drawn without textures rather than crashing.
+            quadWest = null;
+            quadEast = null;
+            quadNorth = null;
+            quadSouth = null;
+            quadUp = null;
+            quadDown = null;
         } else {
-            double[] UV = cubeIn.getUv().boxUVCoords;
+            double[] UV = uvUnion.boxUVCoords;
             Vector3d UVSize = VectorUtils.fromArray(cubeIn.getSize());
             UVSize = new Vector3d(Math.floor(UVSize.x), Math.floor(UVSize.y), Math.floor(UVSize.z));
 

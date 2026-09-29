@@ -18,13 +18,24 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * These versions are accepted rather than remapped to {@link #VERSION_1_12_0}: the geometry builder in this port
  * never branches on the version (nothing outside {@code RawGeoModel} reads it), so the declared value is kept and a
  * caller that wants to restrict which layouts it builds can say so itself.
+ * <p>
+ * Newer Minecraft-release strings are accepted for the same reason. Blockbench keeps stamping the running game
+ * version into {@code format_version} while the geometry schema stays the one this builder already reads, so a pack
+ * exported on a recent version (for example Wine Fox &amp; Friends, whose {@code 08_sta}, {@code 16_tactics},
+ * {@code 18_wedding}, {@code 20_survivor} and {@code 21_saint} player models declare {@code 1.21.0}, and whose
+ * {@code 01_taisho_maid} vehicle model {@code foxcar.json} does too) used to lose six of its twenty-two models to a
+ * deserialize exception. Nothing below branches on the value either.
  */
 public enum FormatVersion {
 
     VERSION_1_8_0,
     VERSION_1_10_0,
     VERSION_1_12_0,
-    VERSION_1_14_0;
+    VERSION_1_14_0,
+    VERSION_1_16_0,
+    VERSION_1_19_0,
+    VERSION_1_20_0,
+    VERSION_1_21_0;
 
     @JsonValue
     public String toValue() {
@@ -37,6 +48,14 @@ public enum FormatVersion {
                 return "1.12.0";
             case VERSION_1_14_0:
                 return "1.14.0";
+            case VERSION_1_16_0:
+                return "1.16.0";
+            case VERSION_1_19_0:
+                return "1.19.0";
+            case VERSION_1_20_0:
+                return "1.20.0";
+            case VERSION_1_21_0:
+                return "1.21.0";
         }
         return null;
     }
@@ -61,6 +80,10 @@ public enum FormatVersion {
         if (normalized.equals("1.10.0")) return VERSION_1_10_0;
         if (normalized.equals("1.12.0")) return VERSION_1_12_0;
         if (normalized.equals("1.14.0")) return VERSION_1_14_0;
+        if (normalized.equals("1.16.0")) return VERSION_1_16_0;
+        if (normalized.equals("1.19.0")) return VERSION_1_19_0;
+        if (normalized.equals("1.20.0")) return VERSION_1_20_0;
+        if (normalized.equals("1.21.0")) return VERSION_1_21_0;
         throw new IOException("Cannot deserialize FormatVersion: " + value);
     }
 }
