@@ -31,6 +31,7 @@ whitelist.json
 *.bat
 *.DS_Store
 !gradlew.bat
+/.agent-teams/
 .factorypath
 addon.local.gradle
 addon.local.gradle.kts
