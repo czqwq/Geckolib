@@ -27,6 +27,7 @@ public class ModelProperties implements Serializable {
     private Double heightScale = 0.7D;
     private Double widthScale = 0.7D;
     private ExtraInfo extraInfo = null;
+    private Boolean renderLayersFirst;
 
     @JsonProperty("animationArmsDown")
     public Boolean getAnimationArmsDown() {
@@ -242,5 +243,20 @@ public class ModelProperties implements Serializable {
     @JsonProperty("ysm_extra_info")
     public void setExtraInfo(ExtraInfo extraInfo) {
         this.extraInfo = extraInfo;
+    }
+
+    /**
+     * Whether the host should draw this model's layers (held item, armor, back attachments) before the model instead
+     * of after it. Carried the same way as the other host-specific properties, under a {@code ysm_} name, and read by
+     * the renderer through {@code IGeoRenderer#shouldRenderLayersFirst}.
+     */
+    @JsonProperty("ysm_render_layers_first")
+    public Boolean getRenderLayersFirst() {
+        return renderLayersFirst;
+    }
+
+    @JsonProperty("ysm_render_layers_first")
+    public void setRenderLayersFirst(Boolean renderLayersFirst) {
+        this.renderLayersFirst = renderLayersFirst;
     }
 }

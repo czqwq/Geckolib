@@ -183,6 +183,11 @@ public class AnimationController<T extends IAnimatable> {
     private final HashMap<String, BoneSnapshot> boneSnapshots = new HashMap<>();
     private boolean justStopped = false;
     protected boolean justStartedTransition = false;
+    /**
+     * The tick a {@link PlayState#PAUSE} began at, or {@code NaN} when the controller is not paused; see
+     * {@code process}.
+     */
+    private double pausedTick = Double.NaN;
     public Function<Double, Double> customEasingMethod;
     protected boolean needsAnimationReload = false;
     public double animationSpeed = 1D;
@@ -494,14 +499,39 @@ public class AnimationController<T extends IAnimatable> {
             }
         }
 
+        // A-07: while the predicate asks to hold this frame, keep evaluating at the tick the pause began. Rebuilding
+        // the queues from that same tick applies exactly the values the bones already carry, so the pose neither
+        // advances nor drifts back to rest - which is what "hold the hand pose while that hand swings" means. Upstream
+        // holds it a different way, by discarding the queued bone animation for the frame
+        // (geckolib3/core/controller/CodedAnimationController.java:87-91); this port has no such separate queue, so it
+        // stops the clock instead. A controller with nothing playing has nothing to hold, and that case stopped above.
+        if (playState == PlayState.PAUSE) {
+            if (Double.isNaN(pausedTick)) {
+                pausedTick = tick;
+            }
+            tick = pausedTick;
+        } else {
+            pausedTick = Double.NaN;
+        }
+
         // Handle transitioning to a different animation (or just starting one)
         if (animationState == AnimationState.Transitioning) {
             // Just started transitioning, so set the current animation to the first one
             if (tick == 0 || isJustStarting) {
                 justStartedTransition = false;
-                this.currentAnimation = animationQueue.poll();
-                resetEventKeyFrames();
-                saveSnapshotsForAnimation(currentAnimation, boneSnapshotCollection);
+                // A controller can be processed more than once at the same tick: a host that draws one entity
+                // through two render paths - YSMU draws the local player in the world and again in the HUD, and both
+                // share this animation data - reaches this block twice with the same tick. The first pass drains
+                // this queue, and polling it a second time would assign null over the animation that is
+                // transitioning. setAnimation's loop guard reads that very field, answers `needsAnimationReload`,
+                // and restarts the transition; since the clock is reset on every restart it can never advance past
+                // transitionLengthTicks, so the controller stays in Transitioning forever and the model is frozen on
+                // the transition's first frame. Only take an animation when there is one to take.
+                if (!animationQueue.isEmpty()) {
+                    this.currentAnimation = animationQueue.poll();
+                    resetEventKeyFrames();
+                    saveSnapshotsForAnimation(currentAnimation, boneSnapshotCollection);
+                }
             }
             if (currentAnimation != null) {
                 setAnimTime(parser, 0);

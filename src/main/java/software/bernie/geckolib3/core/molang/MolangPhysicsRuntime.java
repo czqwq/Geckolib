@@ -34,6 +34,7 @@ public final class MolangPhysicsRuntime {
         ScopeState state = STATES.computeIfAbsent(key, ignored -> new ScopeState());
         state.physics.update(renderTicks);
         applyRemoteVariables(entity, state);
+        applyScopeVariables(animatable, state);
         CURRENT.set(new FrameContext(state, processor));
     }
 
@@ -47,6 +48,18 @@ public final class MolangPhysicsRuntime {
             return;
         }
         state.variables.putAll(remote);
+    }
+
+    /**
+     * Seeds the scope with the variables the animatable supplies for itself, after the entity's remote variables so
+     * a host can override its own values. See {@link IMolangPhysicsScope#getMolangVariables()}.
+     */
+    private static void applyScopeVariables(IMolangPhysicsScope animatable, ScopeState state) {
+        Map<String, Double> own = animatable.getMolangVariables();
+        if (own == null || own.isEmpty()) {
+            return;
+        }
+        state.variables.putAll(own);
     }
 
     public static void end() {

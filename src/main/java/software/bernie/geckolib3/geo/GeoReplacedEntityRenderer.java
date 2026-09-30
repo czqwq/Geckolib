@@ -161,6 +161,11 @@ public abstract class GeoReplacedEntityRenderer<T extends IAnimatable> extends R
                 GlStateManager.translate(0, 0.01f, 0);
                 Minecraft.getMinecraft().renderEngine.bindTexture(getEntityTexture(entity));
                 Color renderColor = getRenderColor(entity, partialTicks);
+                boolean layersFirst = shouldRenderLayersFirst(animatable);
+                if (layersFirst) {
+                    renderLayers(model, entity, limbSwing, limbSwingAmount, partialTicks, f7, netHeadYaw, headPitch,
+                        renderColor);
+                }
 
                 if (!entity.isInvisibleToPlayer(Minecraft.getMinecraft().thePlayer)) render(
                     model,
@@ -171,15 +176,9 @@ public abstract class GeoReplacedEntityRenderer<T extends IAnimatable> extends R
                     (float) renderColor.getBlue() / 255f,
                     (float) renderColor.getAlpha() / 255);
 
-                // 附加层（手持物、护甲等）不再只对玩家开放：穿 YSM 模型的女仆不是 EntityPlayer，但同样需要
-                // 把物品挂在她自己的骨骼上画出来。因此这里放宽到任何 EntityLivingBase。
-                // 安全跳过条件：这一帧必须同时有 animatable 和可用的 geoModel。缺任一项时层没有骨架可挂
-                // （取骨骼或贴图时会 NPE），所以宁可不画；层自身也应各自检查自己的 geoModel 是否可用。
-                if (animatable != null && model != null) {
-                    for (GeoLayerRenderer layerRenderer : this.layerRenderers) {
-                        layerRenderer.render(entity, limbSwing, limbSwingAmount, partialTicks, f7, netHeadYaw,
-                            headPitch, renderColor);
-                    }
+                if (!layersFirst) {
+                    renderLayers(model, entity, limbSwing, limbSwingAmount, partialTicks, f7, netHeadYaw, headPitch,
+                        renderColor);
                 }
                 if (entity instanceof EntityLiving) {
                     Entity leashHolder = ((EntityLiving) entity).getLeashedToEntity();
@@ -208,6 +207,27 @@ public abstract class GeoReplacedEntityRenderer<T extends IAnimatable> extends R
         }
 
         this.passSpecialRender(entity, x, y, z);
+    }
+
+    /**
+     * Draws every registered layer (held item, armor, back attachments) for one frame.
+     * <p>
+     * 附加层（手持物、护甲等）不再只对玩家开放：穿 YSM 模型的女仆不是 EntityPlayer，但同样需要
+     * 把物品挂在她自己的骨骼上画出来。因此这里放宽到任何 EntityLivingBase。
+     * 安全跳过条件：这一帧必须同时有 animatable 和可用的 geoModel。缺任一项时层没有骨架可挂
+     * （取骨骼或贴图时会 NPE），所以宁可不画；层自身也应各自检查自己的 geoModel 是否可用。
+     * <p>
+     * Called before or after the model depending on {@link #shouldRenderLayersFirst(Object)}.
+     */
+    private void renderLayers(GeoModel model, EntityLivingBase entity, float limbSwing, float limbSwingAmount,
+        float partialTicks, float ageInTicks, float netHeadYaw, float headPitch, Color renderColor) {
+        if (animatable == null || model == null) {
+            return;
+        }
+        for (GeoLayerRenderer layerRenderer : this.layerRenderers) {
+            layerRenderer.render(entity, limbSwing, limbSwingAmount, partialTicks, ageInTicks, netHeadYaw, headPitch,
+                renderColor);
+        }
     }
 
     protected void preRenderCallback(EntityLivingBase entitylivingbaseIn, float partialTickTime) {}

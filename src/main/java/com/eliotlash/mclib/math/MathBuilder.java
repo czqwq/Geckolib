@@ -215,8 +215,13 @@ public class MathBuilder {
         if (ternary != null) {
             return ternary;
         }
-        // 防止非法的三元表达式导致 '?' 被当成二元运算符
-        if (symbols.contains("?")) {
+        // 这里以前是：symbols 里还留着 '?' 就整条返回常量 0，用来避免把非法三元的 '?' 当成二元运算符。
+        // 那样会连带废掉 YSM/Bedrock 的另一种写法 cond?value（没有冒号，等价于 cond ? value : 0）——
+        // Operation.CONDITIONAL 现在负责它，否则 "-4+(!v.fm?50)"、"v.hold?!v.speed"、
+        // "(!v.leftbow&&!v.rightbow?(0.2))" 全部恒为 0。
+        // 合法的 a?b:c 在上面已被 tryTernary 取走；这里剩下的 ':' 只可能来自链式三元的错配上，
+        // 而 operationForOperator(":") 会抛异常并把整条表达式判死，所以仍兜底为 0。
+        if (symbols.contains(":")) {
             return new IValue() {
                 @Override
                 public double get() {
@@ -224,6 +229,7 @@ public class MathBuilder {
                 }
             };
         }
+
         int size = symbols.size();
         // 常量、变量或组（括号）
         if (size == 1) {

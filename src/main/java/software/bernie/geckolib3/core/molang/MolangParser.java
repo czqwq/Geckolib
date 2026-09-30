@@ -368,11 +368,60 @@ public class MolangParser extends MathBuilder {
 
     private static String rewriteOpenYsmExpression(String expression) throws MolangException {
         String rewritten = replaceStringLiterals(expression);
+        rewritten = replaceBracePlaceholders(rewritten);
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_rot", "ysm.bone_rot");
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_pos", "ysm.bone_pos");
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_position", "ysm.bone_position");
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_scale", "ysm.bone_scale");
         return rewritten;
+    }
+
+    /** Placeholder names already reported, so a channel evaluated every frame warns once. */
+    private static final java.util.Set<String> REPORTED_BRACE_PLACEHOLDERS =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Replaces a brace placeholder such as {@code {data3}} with {@code 0}.
+     * <p>
+     * A pack can write a value the authoring tool kept in a separate data table, for example the animation file of
+     * 艾莲·乔1.4.0 writes {@code (v.hold?(v.speed?0.24:{data3}))} in its {@code run} and {@code walk} position
+     * channels - 302 expressions across those two animations, and nothing in the pack defines {@code data3}. The
+     * tokenizer rejects '{' as an illegal character, so every one of those channels failed to parse and the animation
+     * silently lost the bones it drove, which is what made that model's walking and running look broken while its
+     * numeric channels were fine.
+     * <p>
+     * The placeholder's value is unknown to this runtime, so it becomes the neutral 0 - the same answer an unset
+     * {@code v.*} variable gives - and the name is warned about once, because a pack that really needs a non-zero
+     * value there has to be told apart from one that does not. Quoted strings are pooled before this runs, so a brace
+     * inside a string literal is untouched.
+     */
+    private static String replaceBracePlaceholders(String expression) {
+        if (expression.indexOf('{') < 0) {
+            return expression;
+        }
+        StringBuilder out = new StringBuilder(expression.length());
+        int index = 0;
+        while (index < expression.length()) {
+            char current = expression.charAt(index);
+            if (current == '{') {
+                int close = expression.indexOf('}', index + 1);
+                if (close > index + 1) {
+                    String name = expression.substring(index + 1, close)
+                        .trim();
+                    if (REPORTED_BRACE_PLACEHOLDERS.add(name)) {
+                        LOG.warn(
+                            "Molang brace placeholder '{{{}}}' has no value in this runtime; using 0 for it",
+                            name);
+                    }
+                    out.append('0');
+                    index = close + 1;
+                    continue;
+                }
+            }
+            out.append(current);
+            index++;
+        }
+        return out.toString();
     }
 
     private static String replaceStringLiterals(String expression) throws MolangException {

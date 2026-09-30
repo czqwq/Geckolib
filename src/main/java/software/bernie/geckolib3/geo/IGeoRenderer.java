@@ -256,4 +256,17 @@ public interface IGeoRenderer<T> {
     default float getHeightScale(T entity) {
         return 1F;
     }
+
+    /**
+     * Whether this frame's layers (held item, back attachments, armor) are drawn before the model instead of after it.
+     * <p>
+     * A pack can declare this per model - a held item or a wing the model geometry is drawn over has to go first,
+     * otherwise the model covers it. The setting belongs to the host that owns the model data, so the renderer asks
+     * here rather than the engine keeping a table of its own.
+     *
+     * @return {@code false} to keep the default order, which draws the model first
+     */
+    default boolean shouldRenderLayersFirst(T animatable) {
+        return false;
+    }
 }
