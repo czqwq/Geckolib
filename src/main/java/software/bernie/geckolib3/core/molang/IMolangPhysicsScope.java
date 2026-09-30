@@ -11,7 +11,8 @@ import net.minecraft.util.ResourceLocation;
  * <p>
  * The physics runtime keys its per-scope state (first/second order filters and roaming variables) on the owning
  * entity plus the active model and animation ids, so the host has to supply all three. Any of the three may be
- * {@code null}; the runtime falls back to an identity based key when the entity is absent.
+ * {@code null}. The ids are compared by value, so a host that builds them anew on every frame - a detached preview
+ * that re-derives its model id per render, for example - still gets the same scope each time.
  */
 public interface IMolangPhysicsScope {
 

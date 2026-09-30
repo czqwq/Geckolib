@@ -177,26 +177,30 @@ public final class MolangPhysicsRuntime {
         private final Map<String, Double> variables = new ConcurrentHashMap<>();
     }
 
+    /**
+     * What one scope belongs to: the owning entity, plus the model and animation being evaluated.
+     * <p>
+     * Every component is compared <em>by value</em>. A detached preview has no entity and is handed freshly built id
+     * objects, so any identity-based component would give it a different key - and therefore a different, empty scope -
+     * from one frame to the next, discarding the variables the pack's own scripts assigned. YSMU's GUI tiles do exactly
+     * that: {@code RenderUtil.renderModel} calls {@code setMainModel(ModelIdUtil.getMainId(modelId))} on every frame
+     * and {@code getMainId} returns a {@code new ResourceLocation}. A world entity never saw the problem because its
+     * key is the player's UUID.
+     */
     private static final class ScopeKey {
         private final UUID entityId;
         private final ResourceLocation modelId;
         private final ResourceLocation animationId;
-        private final int fallbackIdentity;
 
-        private ScopeKey(UUID entityId, ResourceLocation modelId, ResourceLocation animationId, int fallbackIdentity) {
+        private ScopeKey(UUID entityId, ResourceLocation modelId, ResourceLocation animationId) {
             this.entityId = entityId;
             this.modelId = modelId;
             this.animationId = animationId;
-            this.fallbackIdentity = fallbackIdentity;
         }
 
         private static ScopeKey from(EntityLivingBase entity, ResourceLocation modelId,
             ResourceLocation animationId) {
-            UUID entityId = entity == null ? null : entity.getUniqueID();
-            int fallbackIdentity = entityId == null
-                ? 31 * System.identityHashCode(modelId) + System.identityHashCode(animationId)
-                : 0;
-            return new ScopeKey(entityId, modelId, animationId, fallbackIdentity);
+            return new ScopeKey(entity == null ? null : entity.getUniqueID(), modelId, animationId);
         }
 
         @Override
@@ -208,9 +212,6 @@ public final class MolangPhysicsRuntime {
                 return false;
             }
             ScopeKey other = (ScopeKey) obj;
-            if (fallbackIdentity != other.fallbackIdentity) {
-                return false;
-            }
             if (entityId == null ? other.entityId != null : !entityId.equals(other.entityId)) {
                 return false;
             }
@@ -225,7 +226,6 @@ public final class MolangPhysicsRuntime {
             int result = entityId == null ? 0 : entityId.hashCode();
             result = 31 * result + (modelId == null ? 0 : modelId.hashCode());
             result = 31 * result + (animationId == null ? 0 : animationId.hashCode());
-            result = 31 * result + fallbackIdentity;
             return result;
         }
     }
