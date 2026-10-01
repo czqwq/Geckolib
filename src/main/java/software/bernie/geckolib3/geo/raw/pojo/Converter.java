@@ -69,17 +69,33 @@ public class Converter {
     // Serialize/deserialize helpers
 
     public static RawGeoModel fromJsonString(String json) throws IOException {
-        return getObjectReader().readValue(json);
+        return Mapper.READER.readValue(json);
     }
 
     public static String toJsonString(RawGeoModel obj) throws JsonProcessingException {
-        return getObjectWriter().writeValueAsString(obj);
+        return Mapper.WRITER.writeValueAsString(obj);
     }
 
-    private static ObjectReader reader;
-    private static ObjectWriter writer;
+    /**
+     * The shared Jackson reader and writer, built on first use.
+     * <p>
+     * A holder class rather than a pair of lazily assigned statics: class initialisation is guaranteed by the JVM to
+     * run once, under a lock, and to publish the result safely, so two threads reaching this at the same time cannot
+     * build two mappers - or observe a half-constructed one. That matters now that geometry is parsed on a pool:
+     * chunk-loading used to be the only caller and it is single-threaded, so the previous check-then-act on
+     * non-volatile statics was never exercised. It stays lazy, because the holder is only initialised when
+     * {@link Converter#fromJsonString} or {@link Converter#toJsonString} is first called.
+     */
+    private static final class Mapper {
 
-    private static void instantiateMapper() {
+        private static final ObjectMapper MAPPER = createMapper();
+        private static final ObjectReader READER = MAPPER.readerFor(RawGeoModel.class);
+        private static final ObjectWriter WRITER = MAPPER.writerFor(RawGeoModel.class);
+
+        private Mapper() {}
+    }
+
+    private static ObjectMapper createMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.findAndRegisterModules();
         mapper.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
@@ -98,17 +114,6 @@ public class Converter {
             }
         });
         mapper.registerModule(module);
-        reader = mapper.readerFor(RawGeoModel.class);
-        writer = mapper.writerFor(RawGeoModel.class);
-    }
-
-    private static ObjectReader getObjectReader() {
-        if (reader == null) instantiateMapper();
-        return reader;
-    }
-
-    private static ObjectWriter getObjectWriter() {
-        if (writer == null) instantiateMapper();
-        return writer;
+        return mapper;
     }
 }

@@ -123,7 +123,7 @@ When a port needs a value only the host can know, add a hook here rather than a 
 `geo/raw/pojo/Converter` and `geo/raw/pojo/FormatVersion` are where third-party model packs meet the engine, and
 both were originally stricter than the data they parse. Do not tighten them again:
 
-* `Converter.instantiateMapper()` must keep `DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES = false`. Jackson
+* `Converter.createMapper()` must keep `DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES = false`. Jackson
   defaults it to `true` and Bedrock exporters add unmodelled keys (tool version stamps, custom markers), so without
   it one unknown field aborts the whole document and the model silently disappears.
 * `FormatVersion` accepts `1.8.0`, `1.10.0`, `1.12.0` and `1.14.0`, and `forValue` maps each string to **its own
