@@ -123,14 +123,25 @@ public abstract class GeoEntityRenderer<T extends EntityLivingBase & IAnimatable
                 Minecraft.getMinecraft().renderEngine.bindTexture(getEntityTexture(entity));
                 Color renderColor = getRenderColor((T) entity, partialTicks);
 
-                if (!entity.isInvisibleToPlayer(Minecraft.getMinecraft().thePlayer)) render(
-                    model,
-                    (T) entity,
-                    partialTicks,
-                    (float) renderColor.getRed() / 255f,
-                    (float) renderColor.getGreen() / 255f,
-                    (float) renderColor.getBlue() / 255f,
-                    (float) renderColor.getAlpha() / 255);
+                if (!entity.isInvisibleToPlayer(Minecraft.getMinecraft().thePlayer)) {
+                    // Upstream asks for the render type here and hands it to the draw
+                    // (com/elfmcys/ysm/geckolib3/geo/GeoEntityRenderer.java:26-27). 1.7.10 has no
+                    // shouldEntityAppearGlowing, so the glowing flag is always false.
+                    YsmRenderType renderType = getRenderType(
+                        getEntityTexture(entity),
+                        true,
+                        false,
+                        hasTranslucentVertices((T) entity));
+                    render(
+                        model,
+                        (T) entity,
+                        renderType,
+                        partialTicks,
+                        (float) renderColor.getRed() / 255f,
+                        (float) renderColor.getGreen() / 255f,
+                        (float) renderColor.getBlue() / 255f,
+                        (float) renderColor.getAlpha() / 255);
+                }
 
                 // if (!(entity instanceof EntityPlayer) || !((EntityPlayer) entity).isSpectator()) {
                 for (GeoLayerRenderer<T> layerRenderer : this.layerRenderers) {

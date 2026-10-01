@@ -26,6 +26,15 @@ public class AnimationProcessor<T extends IAnimatable> {
 
     public boolean reloadAnimations = false;
     private List<IBone> modelRendererList = new ArrayList();
+
+    /**
+     * Every bone of the model being processed. Read by {@code MolangPhysicsRuntime} to clear the per-bone render
+     * state ({@code bone_color} / {@code bone_transparency} / {@code bone_glow}) at the start of an animation frame,
+     * the equivalent of upstream rebuilding its attribute array every frame.
+     */
+    public List<IBone> getBones() {
+        return this.modelRendererList;
+    }
     private Map<Integer, AnimationRenderState> animatedEntities = new HashMap<>();
     private final IAnimatableModel animatedModel;
 

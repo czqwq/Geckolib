@@ -14,7 +14,9 @@ import it.unimi.dsi.fastutil.objects.Object2FloatOpenHashMap;
  * <p>
  * {@link MolangPhysicsRuntime#begin} merges the stored values into the current Molang scope before the
  * animation is evaluated, so a model can read {@code v.roaming.<name>} directly. Bare names are promoted to
- * the {@code v.roaming.} namespace; names that already carry a {@code v.}/{@code variable.} prefix are kept.
+ * the {@code v.roaming.} namespace; names that already carry a {@code v.}/{@code variable.} prefix keep their
+ * namespace. Either way the stored name is lower-cased, because that is the form the parser looks up - see
+ * {@link #normalize} for why that matters.
  */
 public final class RemoteAnimationVariables {
 
@@ -82,17 +84,28 @@ public final class RemoteAnimationVariables {
         BY_ENTITY.clear();
     }
 
-    /** Promotes a bare roaming name to the full Molang variable name. */
+    /**
+     * Promotes a bare roaming name to the full Molang variable name.
+     * <p>
+     * The result goes through {@link MolangParser#canonicalVariableName}, the one rule for a Molang name: the
+     * parser lower-cases every expression before parsing it, and the engine's newer lexer agrees, so a name stored
+     * in any other case can never be found. A pack writing {@code v.roaming.C} had it stored as {@code v.roaming.C}
+     * and looked up as {@code v.roaming.c}, read as the neutral 0, and every {@code v.roaming.C==0?...} in that pack
+     * took its first branch - the pack's own toggles silently did nothing. Upstream canonicalises identifiers the
+     * same way, in {@code com.elfmcys.ysm.api.molang.MolangNames#identifier}.
+     */
     public static String normalize(String name) {
         if (name == null || name.isEmpty()) {
             return ROAMING_PREFIX;
         }
+        final String canonical;
         if (name.startsWith(VARIABLE_PREFIX)) {
-            return V_PREFIX + name.substring(VARIABLE_PREFIX.length());
+            canonical = V_PREFIX + name.substring(VARIABLE_PREFIX.length());
+        } else if (name.startsWith(V_PREFIX)) {
+            canonical = name;
+        } else {
+            canonical = ROAMING_PREFIX + name;
         }
-        if (name.startsWith(V_PREFIX)) {
-            return name;
-        }
-        return ROAMING_PREFIX + name;
+        return MolangParser.canonicalVariableName(canonical);
     }
 }

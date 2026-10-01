@@ -167,14 +167,26 @@ public abstract class GeoReplacedEntityRenderer<T extends IAnimatable> extends R
                         renderColor);
                 }
 
-                if (!entity.isInvisibleToPlayer(Minecraft.getMinecraft().thePlayer)) render(
-                    model,
-                    entity,
-                    partialTicks,
-                    (float) renderColor.getRed() / 255f,
-                    (float) renderColor.getGreen() / 255f,
-                    (float) renderColor.getBlue() / 255f,
-                    (float) renderColor.getAlpha() / 255);
+                if (!entity.isInvisibleToPlayer(Minecraft.getMinecraft().thePlayer)) {
+                    // Upstream asks for the render type here and hands it to the draw
+                    // (com/elfmcys/ysm/geckolib3/geo/GeoReplacedEntityRenderer.java:88-90). 1.7.10 has no
+                    // shouldEntityAppearGlowing, so the glowing flag is always false. The translucency question goes
+                    // to the animatable, which is the host that owns this model's textures.
+                    YsmRenderType renderType = getRenderType(
+                        getEntityTexture(entity),
+                        true,
+                        false,
+                        hasTranslucentVertices(animatable));
+                    render(
+                        model,
+                        entity,
+                        renderType,
+                        partialTicks,
+                        (float) renderColor.getRed() / 255f,
+                        (float) renderColor.getGreen() / 255f,
+                        (float) renderColor.getBlue() / 255f,
+                        (float) renderColor.getAlpha() / 255);
+                }
 
                 if (!layersFirst) {
                     renderLayers(model, entity, limbSwing, limbSwingAmount, partialTicks, f7, netHeadYaw, headPitch,

@@ -28,6 +28,48 @@ public class ModelProperties implements Serializable {
     private Double widthScale = 0.7D;
     private ExtraInfo extraInfo = null;
     private Boolean renderLayersFirst;
+    /**
+     * The texture the model declares as its own default, carried the same way as the other host-specific properties,
+     * under a {@code ysm_} name.
+     * <p>
+     * Upstream's ladder is the requested name, then the model's own {@code settings.defaultTexture}, then the first
+     * entry ({@code format/schema/model/ModelManifestLookup.java:10-29}), and it validates the declared name against
+     * that model's texture list before using it ({@code containsTexture}, {@code :41-49}). The declared name is
+     * filled with the first texture during assembly when the pack declares none
+     * ({@code RawModelAssembler:189-196}).
+     */
+    private String defaultTexture;
+    /**
+     * Upstream's {@code forceCulling}, which it parses from the pack's {@code all_cutout}
+     * ({@code com/elfmcys/ysm/format/parser/pojo/manifest/settings/ModelProperties.java:35-36} names the field
+     * {@code forceCulling} and gives it {@code @SerializedName("all_cutout")}) and feeds to its bake alongside
+     * {@code forceTranslucent}. The port parses and syncs that field already and now carries it here too, under a
+     * {@code ysm_} name like the other host-specific properties.
+     * <p>
+     * Nothing reads it yet. Upstream's only consumer is its native bake, which cannot be read from here, so the
+     * absence is recorded as a divergence rather than filled with an invented consumer.
+     */
+    private Boolean forceCulling;
+
+    @JsonProperty("ysm_all_cutout")
+    public Boolean getForceCulling() {
+        return forceCulling;
+    }
+
+    @JsonProperty("ysm_all_cutout")
+    public void setForceCulling(Boolean forceCulling) {
+        this.forceCulling = forceCulling;
+    }
+
+    @JsonProperty("ysm_default_texture")
+    public String getDefaultTexture() {
+        return defaultTexture;
+    }
+
+    @JsonProperty("ysm_default_texture")
+    public void setDefaultTexture(String defaultTexture) {
+        this.defaultTexture = defaultTexture;
+    }
 
     @JsonProperty("animationArmsDown")
     public Boolean getAnimationArmsDown() {

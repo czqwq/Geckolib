@@ -1,5 +1,6 @@
 package software.bernie.geckolib3.core.molang;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -9,6 +10,7 @@ import net.minecraft.util.ResourceLocation;
 
 import software.bernie.geckolib3.core.processor.AnimationProcessor;
 import software.bernie.geckolib3.core.processor.IBone;
+import software.bernie.geckolib3.geo.render.built.GeoBone;
 
 /**
  * Per-frame MoLang physics/variable scope.
@@ -35,6 +37,9 @@ public final class MolangPhysicsRuntime {
         state.physics.update(renderTicks);
         applyRemoteVariables(entity, state);
         applyScopeVariables(animatable, state);
+        // Before this frame's expressions run, so the bone_color / bone_transparency / bone_glow calls that follow
+        // start from white, opaque and not emissive rather than from whatever the previous frame left behind.
+        resetBoneRenderState(processor);
         CURRENT.set(new FrameContext(state, processor));
     }
 
@@ -59,7 +64,12 @@ public final class MolangPhysicsRuntime {
         if (own == null || own.isEmpty()) {
             return;
         }
-        state.variables.putAll(own);
+        // Canonicalised on the way in, because the scope is read by the parser under the canonical name: a host that
+        // supplies "v.roaming.C" would otherwise be unreachable from an expression that says "v.roaming.C", since the
+        // parser lower-cases the expression before looking anything up.
+        for (Map.Entry<String, Double> entry : own.entrySet()) {
+            state.variables.put(MolangParser.canonicalVariableName(entry.getKey()), entry.getValue());
+        }
     }
 
     public static void end() {
@@ -151,6 +161,59 @@ public final class MolangPhysicsRuntime {
             return bone.getScaleY();
         }
         return bone.getScaleZ();
+    }
+
+    /**
+     * {@code bone_color(bone, red, green, blue)} - upstream rounds and clamps each channel to 0..255 before storing
+     * it ({@code client/animation/molang/functions/BoneRenderFunction.java:52-66}). A bone this model does not have
+     * is ignored, which is upstream's behaviour too.
+     */
+    public static void boneColor(int nameId, double red, double green, double blue) {
+        GeoBone bone = renderBone(nameId);
+        if (bone == null) {
+            return;
+        }
+        bone.setRenderColor(channel(red), channel(green), channel(blue));
+    }
+
+    /** {@code bone_transparency(bone, alpha)} - 0..255, clamped the way upstream clamps it. */
+    public static void boneTransparency(int nameId, double alpha) {
+        GeoBone bone = renderBone(nameId);
+        if (bone != null) {
+            bone.setRenderTransparency(channel(alpha));
+        }
+    }
+
+    /** {@code bone_glow(bone, level)} - -1 for "not emissive" or 0..15, upstream's clamp range. */
+    public static void boneGlow(int nameId, double level) {
+        GeoBone bone = renderBone(nameId);
+        if (bone != null) {
+            bone.setRenderGlow((int) Math.max(-1.0D, Math.min(15.0D, Math.round(level))));
+        }
+    }
+
+    /**
+     * Clears the per-bone render state before a frame's expressions run, so a bone that stops calling
+     * {@code bone_glow} (or whose model changed) goes back to lit, opaque and white. Upstream gets this for free by
+     * rebuilding its attribute array every frame; the port's bones are cached per model, so it has to be explicit.
+     */
+    public static void resetBoneRenderState(AnimationProcessor<?> processor) {
+        List<IBone> bones = processor.getBones();
+        for (int i = 0; i < bones.size(); i++) {
+            IBone bone = bones.get(i);
+            if (bone instanceof GeoBone geoBone) {
+                geoBone.resetRenderState();
+            }
+        }
+    }
+
+    private static int channel(double value) {
+        return (int) Math.max(0.0D, Math.min(255.0D, Math.round(value)));
+    }
+
+    private static GeoBone renderBone(int nameId) {
+        IBone bone = bone(nameId);
+        return bone instanceof GeoBone geoBone ? geoBone : null;
     }
 
     private static IBone bone(int nameId) {

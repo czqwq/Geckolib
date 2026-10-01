@@ -63,12 +63,28 @@ public interface IGeoRenderer<T> {
         }
     }
 
-    default void render(GeoModel model, T animatable, float partialTicks, float red, float green, float blue,
-        float alpha) {
-        GlStateManager.disableCull();
+    default void render(GeoModel model, T animatable, YsmRenderType type, float partialTicks, float red, float green,
+        float blue, float alpha) {
+        // The GL state comes from the type the caller chose, exactly as upstream's draw applies the RenderType it was
+        // handed (com/elfmcys/ysm/geckolib3/geo/IGeoRenderer.java:18-26). Nothing is decided in here.
+        if (type.isCull()) {
+            GlStateManager.enableCull();
+        } else {
+            GlStateManager.disableCull();
+        }
+        if (type.isAlphaTest()) {
+            GlStateManager.enableAlpha();
+            GlStateManager.alphaFunc(GL11.GL_GREATER, type.getAlphaRef());
+        } else {
+            GlStateManager.disableAlpha();
+        }
         GlStateManager.enableRescaleNormal();
-        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
-        GlStateManager.enableBlend();
+        if (type.isBlend()) {
+            GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+            GlStateManager.enableBlend();
+        } else {
+            GlStateManager.disableBlend();
+        }
         GL11.glEnable(GL11.GL_TEXTURE_2D);
         renderEarly(model, animatable, partialTicks, red, green, blue, alpha);
 
@@ -87,7 +103,10 @@ public interface IGeoRenderer<T> {
 
         renderAfter(model, animatable, partialTicks, red, green, blue, alpha);
         // GlStateManager.disableRescaleNormal();
+        // Restores what this method has always restored. The alpha test is left disabled because the engine never
+        // turned it on before the render type existed, so a cutout draw nets out to no change for anything after it.
         GlStateManager.disableBlend();
+        GlStateManager.disableAlpha();
         GlStateManager.enableCull();
     }
 
@@ -119,18 +138,39 @@ public interface IGeoRenderer<T> {
             }
 
             if (!bone.isHidden()) {
-                int cubeIndex = -1;
-                for (GeoCube cube : bone.childCubes) {
-                    cubeIndex++;
-                    MATRIX_STACK.push();
-                    GlStateManager.pushMatrix();
-                    try {
-                        renderCube(builder, cube, red, green, blue, alpha);
-                    } catch (Exception e) {
-                        reportRenderFailure("cube #" + cubeIndex + " of bone " + bone.getName(), e);
-                    } finally {
-                        GlStateManager.popMatrix();
-                        MATRIX_STACK.pop();
+                // Per-bone render state, upstream's bone_color / bone_transparency / bone_glow. A bone that never sets
+                // them carries white, opaque and "not emissive", so every multiplication below is by one and the
+                // lighting branch is not taken: a model that uses none of these draws exactly as it did before.
+                float boneRed = red * bone.getRenderRed();
+                float boneGreen = green * bone.getRenderGreen();
+                float boneBlue = blue * bone.getRenderBlue();
+                float boneAlpha = alpha * bone.getRenderAlpha();
+                boolean emissive = bone.getRenderGlow() >= 0;
+                if (emissive) {
+                    // The fixed-function pipeline has no per-bone lightmap, so an emissive bone is simply drawn
+                    // unlit. Upstream's level selects a light value there; what a pack asks for by calling
+                    // bone_glow at all is that the bone glows, and the level is kept on the bone for a future
+                    // brightness mapping rather than being invented here.
+                    GlStateManager.disableLighting();
+                }
+                try {
+                    int cubeIndex = -1;
+                    for (GeoCube cube : bone.childCubes) {
+                        cubeIndex++;
+                        MATRIX_STACK.push();
+                        GlStateManager.pushMatrix();
+                        try {
+                            renderCube(builder, cube, boneRed, boneGreen, boneBlue, boneAlpha);
+                        } catch (Exception e) {
+                            reportRenderFailure("cube #" + cubeIndex + " of bone " + bone.getName(), e);
+                        } finally {
+                            GlStateManager.popMatrix();
+                            MATRIX_STACK.pop();
+                        }
+                    }
+                } finally {
+                    if (emissive) {
+                        GlStateManager.enableLighting();
                     }
                 }
             }
@@ -267,6 +307,46 @@ public interface IGeoRenderer<T> {
      * @return {@code false} to keep the default order, which draws the model first
      */
     default boolean shouldRenderLayersFirst(T animatable) {
+        return false;
+    }
+
+    /**
+     * The state this model is drawn with, decided here and handed to {@link #render} as a parameter - the port of
+     * upstream's {@code com/elfmcys/ysm/geckolib3/geo/IGeoRenderer.java:33-39}, same name, same parameters, same
+     * branches. {@link YsmRenderType} is only the carrier, because 1.7.10 has no {@code RenderType} to return.
+     * <p>
+     * Upstream's body, kept verbatim in shape: a visible model is drawn translucent - which blends and culls, and is
+     * what a flat decal needs, because the pack zeroes the uvs of the face it does not want and those faces are built
+     * anyway - or as cutout with no culling. An invisible model is drawn only when it glows, as an outline; 1.7.10 has
+     * no outline pass, so that branch draws nothing, which is this engine's behaviour today.
+     *
+     * @param translucent upstream reads this from {@code data.modelState.hasTranslucentVertices()}; the host answers
+     *                    here through {@link #hasTranslucentVertices}
+     */
+    @Nullable
+    default YsmRenderType getRenderType(ResourceLocation texture, boolean visible, boolean glowing,
+        boolean translucent) {
+        if (visible) {
+            return translucent ? YsmRenderType.translucent(texture) : YsmRenderType.cutoutNoCull(texture);
+        }
+        return null;
+    }
+
+    /**
+     * Whether the model has a vertex that is drawn translucently, i.e. whether {@link #getRenderType} takes the
+     * translucent branch for it.
+     * <p>
+     * Upstream asks its baked model state: {@code GeoModelState#hasTranslucentVertices} returns
+     * {@code nativeState.getTranslucentVertexCount() != 0}
+     * ({@code com/elfmcys/ysm/geckolib3/geo/animated/GeoModelState.java:73-74}), a count its bake produces with the
+     * pack's texture pixels as an input. That count is native and cannot be read here, so the host answers instead,
+     * with the same two inputs the bake has: the per-bone transparency the engine already carries (see
+     * {@code GeoBone#getRenderTransparency}, the port of upstream's {@code AnimatedGeoBone} slot 13) and the texels
+     * the model's faces actually sample.
+     *
+     * @return {@code false} to take the cutout branch, which is what every model did before this existed
+     */
+    default boolean hasTranslucentVertices(T animatable) {
         return false;
     }
 }

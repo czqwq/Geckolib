@@ -2,6 +2,7 @@ package software.bernie.geckolib3.core.molang;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,9 +24,12 @@ import software.bernie.geckolib3.core.molang.expressions.MolangAssignment;
 import software.bernie.geckolib3.core.molang.expressions.MolangExpression;
 import software.bernie.geckolib3.core.molang.expressions.MolangMultiStatement;
 import software.bernie.geckolib3.core.molang.expressions.MolangValue;
+import software.bernie.geckolib3.core.molang.functions.BoneColor;
+import software.bernie.geckolib3.core.molang.functions.BoneGlow;
 import software.bernie.geckolib3.core.molang.functions.BonePosition;
 import software.bernie.geckolib3.core.molang.functions.BoneRotation;
 import software.bernie.geckolib3.core.molang.functions.BoneScale;
+import software.bernie.geckolib3.core.molang.functions.BoneTransparency;
 import software.bernie.geckolib3.core.molang.functions.CosDegrees;
 import software.bernie.geckolib3.core.molang.functions.FirstOrder;
 import software.bernie.geckolib3.core.molang.functions.SecondOrder;
@@ -70,6 +74,15 @@ public class MolangParser extends MathBuilder {
         this.functions.put("ysm.bone_scale_x", BoneScale.class);
         this.functions.put("ysm.bone_scale_y", BoneScale.class);
         this.functions.put("ysm.bone_scale_z", BoneScale.class);
+
+        // Upstream's per-bone render functions, registered under the names a pack actually calls them by
+        // (com/elfmcys/ysm/client/animation/molang/YSMBinding.java:82-85) rather than under the ysm. prefix the
+        // query functions above use. bone_color(bone, r, g, b) is white by default, bone_transparency(bone, alpha)
+        // is opaque by default and bone_glow(bone, level) is -1, i.e. not emissive, so a model that calls none of
+        // them renders exactly as it did before these existed.
+        this.functions.put("bone_color", BoneColor.class);
+        this.functions.put("bone_transparency", BoneTransparency.class);
+        this.functions.put("bone_glow", BoneGlow.class);
 
         remap("abs", "math.abs");
         remap("acos", "math.acos");
@@ -172,14 +185,29 @@ public class MolangParser extends MathBuilder {
         return getVariable(name);
     }
 
+    /**
+     * The single rule for every Molang variable name. Names are case-insensitive, so the canonical form is
+     * lower-case, and the two interchangeable prefixes are folded into one spelling.
+     * <p>
+     * {@link #parseExpression} lower-cases a whole expression before parsing it, so a variable registered in any
+     * other case can never be found: a pack writing {@code v.roaming.C} had it stored as written and looked up as
+     * {@code v.roaming.c}, read as the neutral 0, and every {@code v.roaming.C==0?...} in that pack took its first
+     * branch - the pack's own settings toggles silently did nothing. Upstream canonicalises identifiers the same way,
+     * in {@code com.elfmcys.ysm.api.molang.MolangNames#identifier}.
+     */
+    public static String canonicalVariableName(String name) {
+        String canonical = name.toLowerCase(Locale.ROOT);
+        if (canonical.startsWith("q.")) {
+            return "query." + canonical.substring(2);
+        }
+        if (canonical.startsWith("variable.")) {
+            return "v." + canonical.substring("variable.".length());
+        }
+        return canonical;
+    }
+
     private static String normalizeVariableName(String name) {
-        if (name.startsWith("q.")) {
-            return "query." + name.substring(2);
-        }
-        if (name.startsWith("variable.")) {
-            return "v." + name.substring("variable.".length());
-        }
-        return name;
+        return canonicalVariableName(name);
     }
 
     private static LazyVariable newVariable(String key) {
