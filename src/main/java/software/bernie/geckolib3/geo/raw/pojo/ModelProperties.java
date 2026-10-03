@@ -27,6 +27,9 @@ public class ModelProperties implements Serializable {
     private Double heightScale = 0.7D;
     private Double widthScale = 0.7D;
     private ExtraInfo extraInfo = null;
+    /** YSM 的 {@code properties.render_layers_first}：渲染层（手持物品层）在本体之前提交，
+     *  让本体把物品盖住。由 {@code RawYsmModelAdapter.applyOpenYsmModelInfo} 注入 geometry
+     *  的 description。 */
     private Boolean renderLayersFirst;
     /**
      * The texture the model declares as its own default, carried the same way as the other host-specific properties,
@@ -300,5 +303,11 @@ public class ModelProperties implements Serializable {
     @JsonProperty("ysm_render_layers_first")
     public void setRenderLayersFirst(Boolean renderLayersFirst) {
         this.renderLayersFirst = renderLayersFirst;
+    }
+
+    /** 便捷读取：字段缺失（旧模型/未注入）按 false 处理。 */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean isRenderLayersFirst() {
+        return Boolean.TRUE.equals(renderLayersFirst);
     }
 }

@@ -26,6 +26,13 @@ public class GeckoLib {
     public static final String MOD_NAME = "GeckoLib";
     public static final Logger LOG = LogManager.getLogger(MOD_ID);
 
+    /**
+     * Turns on the geometry-submission counters in {@link software.bernie.geckolib3.util.GeoStats}. Off by default;
+     * a host mod may set it from its own debug switches (the dependency direction is host to engine, never the
+     * reverse). While off every note call is one static read and a return.
+     */
+    public static volatile boolean geoStatsEnabled = false;
+
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
         ConfigHandler.init(new File(event.getModConfigurationDirectory(), "geckolib.cfg"));

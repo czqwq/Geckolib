@@ -26,6 +26,7 @@ public class GeoCube implements Serializable {
     public double inflate;
     public Boolean mirror;
     public boolean mesh;
+    public boolean hasNegSize;
 
     private GeoCube(double[] size) {
         if (size.length >= 3) {
@@ -98,6 +99,12 @@ public class GeoCube implements Serializable {
 
     public static GeoCube createFromPojoCube(Cube cubeIn, ModelProperties properties, Double boneInflate,
         Boolean mirror) {
+        // Detect negative-size cubes (inside-out shell effect used by some models).
+        // Must check raw size before any transformation.
+        double[] rawSize = cubeIn.getSize();
+        boolean hasNegSize = rawSize != null && rawSize.length >= 3
+            && (rawSize[0] < 0 || rawSize[1] < 0 || rawSize[2] < 0);
+
         GeoCube cube = new GeoCube(cubeIn.getSize());
 
         // Model packs are third-party data and a cube may omit "uv" entirely (or carry "uv": null). Everything
@@ -122,9 +129,23 @@ public class GeoCube implements Serializable {
             : properties.getTextureWidth()
                 .floatValue();
 
-        Vector3d size = VectorUtils.fromArray(cubeIn.getSize());
-        Vector3d origin = VectorUtils.fromArray(cubeIn.getOrigin());
-        origin = new Vector3d(-(origin.x + size.x) / 16, origin.y / 16, origin.z / 16);
+        // Use absolute size so vertex math works correctly for negative-size cubes.
+        // Also adjust origin to the true minimum corner.
+        double[] rawOrigin = cubeIn.getOrigin();
+        double ox = rawOrigin != null && rawOrigin.length >= 1 ? rawOrigin[0] : 0;
+        double oy = rawOrigin != null && rawOrigin.length >= 2 ? rawOrigin[1] : 0;
+        double oz = rawOrigin != null && rawOrigin.length >= 3 ? rawOrigin[2] : 0;
+        double sx = rawSize != null && rawSize.length >= 1 ? Math.abs(rawSize[0]) : 1;
+        double sy = rawSize != null && rawSize.length >= 2 ? Math.abs(rawSize[1]) : 1;
+        double sz = rawSize != null && rawSize.length >= 3 ? Math.abs(rawSize[2]) : 1;
+        // If original size was negative in a dimension, shift origin to the true
+        // minimum corner (the normalization that sanitizeGeometryJson would do).
+        if (rawSize != null && rawSize.length >= 1 && rawSize[0] < 0) ox += rawSize[0]; // rawSize[0] is negative
+        if (rawSize != null && rawSize.length >= 2 && rawSize[1] < 0) oy += rawSize[1];
+        if (rawSize != null && rawSize.length >= 3 && rawSize[2] < 0) oz += rawSize[2];
+
+        Vector3d size = new Vector3d(sx, sy, sz);
+        Vector3d origin = new Vector3d(-(ox + sx) / 16, oy / 16, oz / 16);
 
         size.x *= 0.0625f;
         size.y *= 0.0625f;
@@ -489,6 +510,13 @@ public class GeoCube implements Serializable {
         cube.quads[3] = quadSouth;
         cube.quads[4] = quadUp;
         cube.quads[5] = quadDown;
+
+        storeCubeHasNegSize(cube, hasNegSize);
+
         return cube;
+    }
+
+    private static void storeCubeHasNegSize(GeoCube cube, boolean hasNegSize) {
+        cube.hasNegSize = hasNegSize;
     }
 }

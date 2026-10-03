@@ -7,6 +7,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.DoubleSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.logging.log4j.Logger;
 
@@ -15,6 +17,7 @@ import com.eliotlash.mclib.math.IValue;
 import com.eliotlash.mclib.math.MathBuilder;
 import com.eliotlash.mclib.math.Variable;
 import com.eliotlash.mclib.math.functions.Function;
+import com.eliotlash.mclib.math.functions.classic.MinAngle;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 
@@ -38,6 +41,12 @@ import software.bernie.geckolib3.core.molang.functions.SinDegrees;
 /**
  * MoLang 解析器
  * <a href="https://bedrock.dev/docs/1.19.0.0/1.19.30.23/Molang#Math%20Functions">Wiki</a>
+ *
+ * YSMU: Heavily modified — added function namespace remapping (ysm.*),
+ * null-coalescing (??) operator, vector function rewriting (bone_rot/bone_pos),
+ * string literal pooling, scoped variable support (ScopedMolangVariable),
+ * and OpenYSM expression compatibility. The original MolangParser has been
+ * largely rewritten to support YSMU's extended animation system.
  */
 public class MolangParser extends MathBuilder {
 
@@ -45,6 +54,34 @@ public class MolangParser extends MathBuilder {
     public static final MolangExpression ZERO = new MolangValue(null, new Constant(0));
     public static final MolangExpression ONE = new MolangValue(null, new Constant(1));
     public static final String RETURN = "return ";
+
+    /**
+     * Host-mod-injected hook: registers YSMU-specific Molang functions on every
+     * newly constructed parser. Inverted control — this vendored file has no
+     * compile-time dependency on mod code (same pattern as
+     * AnimationFile.builtinFallback). Set once at mod init; read-only afterwards;
+     * null → no YSMU-specific functions are registered (graceful fallback).
+     */
+    @FunctionalInterface
+    public interface MolangFunctionRegistrar {
+        void register(Map<String, Class<? extends Function>> functions);
+    }
+
+    public static volatile MolangFunctionRegistrar ysmFunctionRegistrar = null;
+
+    /**
+     * Host-mod-injected hook: decides, for the current render frame, whether a
+     * {@code v.} variable was EXPLICITLY set (even to 0) vs merely
+     * default-initialized. Used by the {@code ??} null-coalescing operator.
+     * Receives the full variable name as written (e.g. {@code v.roaming.x}).
+     * Null → treated as "not explicitly set" (graceful fallback).
+     */
+    @FunctionalInterface
+    public interface ExplicitVariableLookup {
+        boolean isExplicitlySet(String fullVariableName);
+    }
+
+    public static volatile ExplicitVariableLookup explicitVariableLookup = null;
 
     private static final Logger LOG = GeckoLib.LOG;
     /** 已经报告过的解析失败原因，同一个原因（例如同一个未注册函数）之后不再刷日志。 */
@@ -84,6 +121,13 @@ public class MolangParser extends MathBuilder {
         this.functions.put("bone_transparency", BoneTransparency.class);
         this.functions.put("bone_glow", BoneGlow.class);
 
+        // YSMU 特有的 ysm.* / ctrl.* / query.* 函数由宿主 mod 通过
+        // ysmFunctionRegistrar 钩子注入（反向控制，本文件不引用 mod 类）。
+        MolangFunctionRegistrar registrar = ysmFunctionRegistrar;
+        if (registrar != null) {
+            registrar.register(this.functions);
+        }
+
         remap("abs", "math.abs");
         remap("acos", "math.acos");
         remap("asin", "math.asin");
@@ -92,6 +136,12 @@ public class MolangParser extends MathBuilder {
         remap("ceil", "math.ceil");
         remap("clamp", "math.clamp");
         remap("cos", "math.cos");
+        // MathBuilder 将这些函数注册为短名，需要直接复制到 math.* 名下
+        this.functions.put("math.die_roll", this.functions.get("roll"));
+        this.functions.put("math.die_roll_integer", this.functions.get("rolli"));
+        this.functions.put("math.hermite_blend", this.functions.get("hermite"));
+        // math.min_angle：Bedrock/OpenYSM 单参数角度归一化（mclib 原版没有）。
+        this.functions.put("math.min_angle", MinAngle.class);
         remap("exp", "math.exp");
         remap("floor", "math.floor");
         remap("lerp", "math.lerp");
@@ -100,19 +150,22 @@ public class MolangParser extends MathBuilder {
         remap("max", "math.max");
         remap("min", "math.min");
         remap("mod", "math.mod");
+        // π/e 在 MathBuilder 中注册为变量（键 "PI"/"E"），并非函数。原
+        // remap("pi", "math.pi") 会从函数表 remove 不存在的 "pi" 键并
+        // 把 null 塞进 "math.pi"，既污染函数表又让变量查询得到默认 0。
+        // 这里改为直接注册 math.* 常量变量，overlay/query 即可显示正确值。
+        // math.pi 是常量而不是函数（原来把它 remap 成函数只会留下一个空类）
+        this.register(new LazyVariable("math.pi", Math.PI));
+        this.register(new LazyVariable("math.e", Math.E));
         remap("pow", "math.pow");
         remap("random", "math.random");
         // 源名必须是真正注册过的名字：MathBuilder 里是 randomi/roll/rolli/hermite
-        remap("randomi", "math.random_integer");
+        // MathBuilder 将 random_integer 注册为 "randomi"，而非 "random_integer"
+        this.functions.put("math.random_integer", this.functions.get("randomi"));
         remap("round", "math.round");
         remap("sin", "math.sin");
         remap("sqrt", "math.sqrt");
         remap("trunc", "math.trunc");
-        remap("roll", "math.die_roll");
-        remap("rolli", "math.die_roll_integer");
-        remap("hermite", "math.hermite_blend");
-        // math.pi 是常量而不是函数（原来把它 remap 成函数只会留下一个空类）
-        register(new Variable("math.pi", Math.PI));
     }
 
     @Override
@@ -303,6 +356,36 @@ public class MolangParser extends MathBuilder {
             }
         }
 
+        // Handle null-coalescing operator: a ?? b
+        // Intended semantics: use a if it was explicitly set (even to 0),
+        // otherwise fall back to b.  The original implementation checked
+        // l != 0, which treated explicit 0 the same as "never set".
+        int ncIdx = findNullCoalesce(expression);
+        if (ncIdx > 0) {
+            String leftExpr = expression.substring(0, ncIdx).trim();
+            String rightExpr = expression.substring(ncIdx + 2).trim();
+            MolangExpression leftVal = parseOneLine(leftExpr, currentStatement);
+            MolangExpression rightVal = parseOneLine(rightExpr, currentStatement);
+            return new MolangValue(this, new com.eliotlash.mclib.math.IValue() {
+                @Override
+                public double get() {
+                    double l = leftVal.get();
+                    double r = rightVal.get();
+                    // Check if the variable was EXPLICITLY set by the user (via GUI/config),
+                    // not just default-initialized.  Default-initialized variables are in
+                    // PENDING_ROAMING but NOT in EXPLICIT_ROAMING, so they still fall
+                    // through to the default when their value is 0.
+                    boolean userSet = false;
+                    ExplicitVariableLookup lookup = explicitVariableLookup;
+                    if (lookup != null) {
+                        userSet = lookup.isExplicitlySet(leftExpr);
+                    }
+                    double result = userSet ? l : (l != 0 ? l : r);
+                    return result;
+                }
+            });
+        }
+
         try {
             // 将表达式拆分
             List<Object> symbols = breakdownChars(this.breakdown(expression));
@@ -340,6 +423,51 @@ public class MolangParser extends MathBuilder {
             reportParseFailure(e);
             throw new MolangException("Couldn't parse an expression!");
         }
+    }
+
+    /**
+     * OpenYSM 支持三元/括号内的嵌套赋值（如 {@code (cond) ? (v.wet = 30) : 0}）。
+     * mclib 的 {@link Operation#ASSIGN} 只是纯函数（返回右值、不写回变量），
+     * 无法产生副作用，因此这里把 {@code [var, "=", expr...]} 模式改写为带
+     * 副作用的 {@link MolangAssignment}。
+     */
+    @Override
+    public IValue parseSymbols(List<Object> symbols) throws Exception {
+        if (symbols.size() >= 3
+            && symbols.get(0) instanceof String
+            && symbols.get(1) instanceof String
+            && "=".equals(symbols.get(1))
+            && isVariable(symbols.get(0))) {
+            String name = normalizeVariableName((String) symbols.get(0));
+            LazyVariable variable = getVariable(name);
+            IValue value = parseSymbols(symbols.subList(2, symbols.size()));
+            return new MolangAssignment(this, variable, value);
+        }
+        return super.parseSymbols(symbols);
+    }
+
+    /**
+     * Finds the first {@code ??} (null-coalescing) operator in the expression,
+     * skipping over parenthesized groups and string literals.
+     * Returns the index of the first {@code ?}, or -1 if not found.
+     */
+    private static int findNullCoalesce(String expression) {
+        int depth = 0;
+        boolean inString = false;
+        for (int i = 0; i < expression.length() - 1; i++) {
+            char c = expression.charAt(i);
+            if (c == '\'' || c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+            if (c == '(') { depth++; continue; }
+            if (c == ')') { depth--; continue; }
+            if (depth == 0 && c == '?' && expression.charAt(i + 1) == '?') {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /**
@@ -397,11 +525,46 @@ public class MolangParser extends MathBuilder {
     private static String rewriteOpenYsmExpression(String expression) throws MolangException {
         String rewritten = replaceStringLiterals(expression);
         rewritten = replaceBracePlaceholders(rewritten);
+        // wiki: molang/var —— query. 可以缩写成 q.。normalizeVariableName 只覆盖变量，
+        // 函数是按字面名在 functions 表里查的，所以这里必须把 q.xxx( 改写成 query.xxx(，
+        // 否则 q.max_durability('mainhand') 这类关键帧表达式整条解析失败。
+        rewritten = rewriteQueryAbbreviation(rewritten);
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_rot", "ysm.bone_rot");
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_pos", "ysm.bone_pos");
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_position", "ysm.bone_position");
         rewritten = rewriteVectorFunction(rewritten, "ysm.bone_scale", "ysm.bone_scale");
+        rewritten = rewriteVectorFunction(rewritten, "ysm.bone_pivot_abs", "ysm.bone_pivot_abs");
         return rewritten;
+    }
+
+    /**
+     * {@code q.}<b>函数调用</b> → {@code query.}。只匹配调用形式（后面紧跟 {@code (}），
+     * 且要求前面不是标识符字符或 {@code .}，这样 {@code v.q}、{@code v.aq} 不会被误改
+     * （变量缩写已由 {@link #normalizeVariableName} 处理）。
+     *
+     * <p>调用点在 {@code replaceStringLiterals} 之后，表达式里已无字符串字面量，
+     * 因此不必再担心改到引号内容。</p>
+     */
+    private static final Pattern QUERY_ABBREVIATION_CALL =
+        Pattern.compile("(?<![\\w.])q\\.([a-z_][a-z0-9_]*)\\s*\\(");
+
+    private static String rewriteQueryAbbreviation(String expression) {
+        if (expression.indexOf("q.") < 0) {
+            return expression;
+        }
+        Matcher matcher = QUERY_ABBREVIATION_CALL.matcher(expression);
+        StringBuilder out = new StringBuilder(expression.length() + 16);
+        int last = 0;
+        while (matcher.find()) {
+            out.append(expression, last, matcher.start());
+            out.append("query.").append(matcher.group(1)).append('(');
+            last = matcher.end();
+        }
+        if (last == 0) {
+            return expression;
+        }
+        out.append(expression, last, expression.length());
+        return out.toString();
     }
 
     /** Placeholder names already reported, so a channel evaluated every frame warns once. */
