@@ -152,7 +152,12 @@ public final class MolangPhysicsRuntime {
     public static double boneScale(int nameId, char axis) {
         IBone bone = bone(nameId);
         if (bone == null) {
-            return axis == 'x' || axis == 'y' || axis == 'z' ? 1.0D : 0.0D;
+            // Upstream returns null for a bone it cannot find (BoneParamFunction.java:22-26), and its runtime turns
+            // that into 0 wherever the value is used as a number (ValueConversions.asDouble:76-79). 0 is therefore the
+            // faithful answer; identity is not, because a bone that does not exist would read as a scale of 1 and a
+            // pack testing `ysm.bone_scale('X') > 0` would take the true branch. The old code also returned 1 only for
+            // a known axis and 0 otherwise, which made the answer depend on how the caller spelled the axis.
+            return 0.0D;
         }
         if (axis == 'x') {
             return bone.getScaleX();

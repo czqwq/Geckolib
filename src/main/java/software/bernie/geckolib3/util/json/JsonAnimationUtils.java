@@ -21,12 +21,14 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 
+import software.bernie.geckolib3.GeckoLib;
 import software.bernie.geckolib3.core.builder.Animation;
 import software.bernie.geckolib3.core.builder.ILoopType;
 import software.bernie.geckolib3.core.keyframe.BoneAnimation;
 import software.bernie.geckolib3.core.keyframe.EventKeyFrame;
 import software.bernie.geckolib3.core.keyframe.ParticleEventKeyFrame;
 import software.bernie.geckolib3.core.keyframe.VectorKeyFrameList;
+import software.bernie.geckolib3.core.molang.MolangException;
 import software.bernie.geckolib3.core.molang.MolangParser;
 import software.bernie.geckolib3.file.GeckoJsonException;
 import software.bernie.geckolib3.util.AnimationUtils;
@@ -279,6 +281,24 @@ public class JsonAnimationUtils {
             : AnimationUtils.convertSecondsToTicks(animation_length.getAsDouble());
         animation.boneAnimations = new ArrayList();
         animation.loop = ILoopType.fromJson(animationJsonObject.get("loop"));
+
+        // How much this animation contributes when several play at once. Upstream reads the same key into its own
+        // Animation.blendWeight (JsonAnimationUtils:78-85, consumed at AnimationPlayer:318/:346/:365 with a fallback of
+        // 1). Left null when the animation declares none, which is the common case, so the fold keeps contributing it
+        // fully without an expression to evaluate.
+        JsonElement blendWeightElement = animationJsonObject.get("blend_weight");
+        if (blendWeightElement != null && blendWeightElement.isJsonPrimitive()) {
+            try {
+                animation.blendWeight = parser.parseJson(blendWeightElement);
+            } catch (MolangException e) {
+                // One unparseable weight must not fail the whole animation the way a missing bone must not: the
+                // animation still plays, it just contributes fully. Upstream reaches the same outcome by parsing the
+                // field into an IValue it only ever reads through a null check (JsonAnimationUtils:78-85,
+                // AnimationPlayer:318).
+                GeckoLib.LOG.warn("Could not parse blend_weight for animation " + element.getKey(), e);
+                animation.blendWeight = null;
+            }
+        }
 
         // Handle parsing sound effect keyframes
         ArrayList<Map.Entry<String, JsonElement>> soundEffectFrames = getSoundEffectFrames(animationJsonObject);

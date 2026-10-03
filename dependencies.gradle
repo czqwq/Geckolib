@@ -14,6 +14,13 @@ dependencies {
 
     compileOnly("org.jetbrains:annotations:26.0.2")
 
+    // JOML supplies the Vector3f/Quaternionf the rotation blending is built on (see MathUtil.lerpRotationValues and
+    // AnimationVec3). It has always reached the main compile classpath transitively, but NOT the test classpath, so it
+    // is declared explicitly here: a transitive dependency is not something new public API should lean on, and its
+    // absence from the test classpath is what stopped the blending helpers from being covered at all.
+    compileOnly("org.joml:joml:1.10.8")
+    testImplementation("org.joml:joml:1.10.8")
+
     // The Bedrock geometry POJOs in software.bernie.geckolib3.geo.raw.pojo are Jackson-annotated.
     implementation("com.fasterxml.jackson.core:jackson-databind:2.9.0")
     shadowImplementation("com.fasterxml.jackson.core:jackson-databind:2.9.0")

@@ -24,6 +24,7 @@ import com.eliotlash.mclib.math.IValue;
 
 import software.bernie.geckolib3.core.AnimationState;
 import software.bernie.geckolib3.core.ConstantValue;
+import software.bernie.geckolib3.core.controller.transition.IBlendTransition;
 import software.bernie.geckolib3.core.IAnimatable;
 import software.bernie.geckolib3.core.IAnimatableModel;
 import software.bernie.geckolib3.core.PlayState;
@@ -38,6 +39,7 @@ import software.bernie.geckolib3.core.event.ParticleKeyFrameEvent;
 import software.bernie.geckolib3.core.event.SoundKeyframeEvent;
 import software.bernie.geckolib3.core.event.predicate.AnimationEvent;
 import software.bernie.geckolib3.core.keyframe.AnimationPoint;
+import software.bernie.geckolib3.core.util.MathUtil;
 import software.bernie.geckolib3.core.keyframe.BoneAnimation;
 import software.bernie.geckolib3.core.keyframe.BoneAnimationQueue;
 import software.bernie.geckolib3.core.keyframe.EventKeyFrame;
@@ -78,6 +80,72 @@ public class AnimationController<T extends IAnimatable> {
      * How long it takes to transition between animations
      */
     public double transitionLengthTicks;
+    /**
+     * The shape a transition follows over its length, or {@code null} for this engine's plain linear ramp.
+     * <p>
+     * A Bedrock pack may declare a transition as a {@code time -> weight} curve rather than a length, and upstream
+     * builds a different implementation per form ({@code geckolib3/core/controller/transition/}, chosen in
+     * {@code BlendTransition.Adapter:31-39}). The engine's length is a scalar, so the shape is carried beside it and
+     * read when the transition's points are built - see {@link #setBlendTransition} and {@link #transitionPoint}.
+     * <p>
+     * {@code null} means "behave exactly as before", which is the case for every caller that has not declared a curve,
+     * so this changes no existing behaviour.
+     */
+    protected IBlendTransition blendTransition;
+
+    /**
+     * Sets how long a transition lasts and the shape it follows, from one place.
+     * <p>
+     * The two are set together rather than separately because they describe one transition: a curve whose own length
+     * disagrees with {@link #transitionLengthTicks} would interpolate over a span the controller has already left, and
+     * the engine decides when a transition has ended from the length alone
+     * ({@code tick >= transitionLengthTicks}). A {@code null} transition clears the shape, which is upstream's outcome
+     * for a state that declares no {@code blend_transition} at all.
+     *
+     * @param lengthTicks how long the transition lasts, in ticks; a negative value leaves it unchanged
+     * @param transition  the curve to follow, or {@code null} for this engine's linear ramp
+     */
+    public void setBlendTransition(double lengthTicks, IBlendTransition transition) {
+        if (lengthTicks >= 0) {
+            this.transitionLengthTicks = lengthTicks;
+        }
+        this.blendTransition = transition;
+    }
+
+    /**
+     * One point of a transition: the value the bone already held, the value the incoming animation starts at, and the
+     * length and shape this controller is currently transitioning with.
+     * <p>
+     * Built here rather than inline at each of the nine queue sites so the curve cannot reach some channels and not
+     * others - a rotation that followed the pack's curve while its position ramped linearly is a mis-pose nobody can
+     * attribute from the outside.
+     * <p>
+     * <b>The curve is applied here, by remapping the tick - not inside {@code MathUtil}.</b> Upstream keeps the two
+     * apart: its keyframe lerp divides {@code currentTick / animationEndTick} linearly
+     * (`LgeacyYSM-1.20.1-forge` {@code MathUtil.java:25,30}), while a transition's shape is consulted by the
+     * transition point itself - {@code BeginningTransitionPoint.getLerpPoint} reads
+     * {@code beginningTransition.get(transitionTicks)} and passes the fraction in as an argument
+     * ({@code YesSteveModel-dev-1.20} {@code AnimationPlayer.java:319}, {@code BeginningTransitionPoint.java}).
+     * The port previously consulted the curve from {@code MathUtil.lerpValues(AnimationPoint, ...)} through
+     * {@link software.bernie.geckolib3.core.keyframe.AnimationPoint#percentCompleted()}, which put a transition-only
+     * shape on the shared path that every animation's keyframes also travel - and a {@code blend_transition} is
+     * exactly what packs declare on their walk and run states.
+     * <p>
+     * Remapping the tick keeps the curve on all nine channels while leaving the shared lerp linear, so the point's own
+     * interpolation reproduces the shaped value: for a point spanning {@code [0, length]} the linear fraction is
+     * {@code tick / length}, so a tick of {@code curve(tick) * length} yields {@code curve(tick)}.
+     */
+    private AnimationPoint transitionPoint(double tick, double from, Double to) {
+        // The curve is applied by remapping the tick, not by leaving it on the point for MathUtil to read - see
+        // MathUtil.shapedTransitionTick for why, and for the two references that fix the placement.
+        return new AnimationPoint(
+            null,
+            MathUtil.shapedTransitionTick(tick, transitionLengthTicks, blendTransition),
+            transitionLengthTicks,
+            from,
+            to,
+            null);
+    }
 
     /**
      * The sound listener is called every time a sound keyframe is encountered (i.e.
@@ -551,6 +619,11 @@ public class AnimationController<T extends IAnimatable> {
                         }
                     }
                     markActiveBoneAnimationQueue(boneAnimationQueue);
+                    // The animation's own contribution weight travels with the values it weights, so a bone's rotation
+                    // and its weight cannot come from different players. Upstream sets it at the same point in each of
+                    // its three paths (AnimationPlayer:322, :348, :368) from the animation's blend_weight, falling back
+                    // to 1 when it declares none (:318).
+                    boneAnimationQueue.setBlendWeight(blendWeightOf(currentAnimation));
                     BoneSnapshot initialSnapshot = first.get()
                         .getInitialSnapshot();
                     assert boneSnapshot != null : "Bone snapshot was null";
@@ -566,24 +639,18 @@ public class AnimationController<T extends IAnimatable> {
                         AnimationPoint yPoint = getAnimationPointAtTick(rotationKeyFrames.yKeyFrames, 0, true, Axis.Y);
                         AnimationPoint zPoint = getAnimationPointAtTick(rotationKeyFrames.zKeyFrames, 0, true, Axis.Z);
                         boneAnimationQueue.rotationXQueue.add(
-                            new AnimationPoint(
-                                null,
+                            transitionPoint(
                                 tick,
-                                transitionLengthTicks,
                                 boneSnapshot.rotationValueX - initialSnapshot.rotationValueX,
                                 xPoint.animationStartValue));
                         boneAnimationQueue.rotationYQueue.add(
-                            new AnimationPoint(
-                                null,
+                            transitionPoint(
                                 tick,
-                                transitionLengthTicks,
                                 boneSnapshot.rotationValueY - initialSnapshot.rotationValueY,
                                 yPoint.animationStartValue));
                         boneAnimationQueue.rotationZQueue.add(
-                            new AnimationPoint(
-                                null,
+                            transitionPoint(
                                 tick,
-                                transitionLengthTicks,
                                 boneSnapshot.rotationValueZ - initialSnapshot.rotationValueZ,
                                 zPoint.animationStartValue));
                     }
@@ -593,26 +660,11 @@ public class AnimationController<T extends IAnimatable> {
                         AnimationPoint yPoint = getAnimationPointAtTick(positionKeyFrames.yKeyFrames, 0, false, Axis.Y);
                         AnimationPoint zPoint = getAnimationPointAtTick(positionKeyFrames.zKeyFrames, 0, false, Axis.Z);
                         boneAnimationQueue.positionXQueue.add(
-                            new AnimationPoint(
-                                null,
-                                tick,
-                                transitionLengthTicks,
-                                boneSnapshot.positionOffsetX,
-                                xPoint.animationStartValue));
+                            transitionPoint(tick, boneSnapshot.positionOffsetX, xPoint.animationStartValue));
                         boneAnimationQueue.positionYQueue.add(
-                            new AnimationPoint(
-                                null,
-                                tick,
-                                transitionLengthTicks,
-                                boneSnapshot.positionOffsetY,
-                                yPoint.animationStartValue));
+                            transitionPoint(tick, boneSnapshot.positionOffsetY, yPoint.animationStartValue));
                         boneAnimationQueue.positionZQueue.add(
-                            new AnimationPoint(
-                                null,
-                                tick,
-                                transitionLengthTicks,
-                                boneSnapshot.positionOffsetZ,
-                                zPoint.animationStartValue));
+                            transitionPoint(tick, boneSnapshot.positionOffsetZ, zPoint.animationStartValue));
                     }
 
                     if (!scaleKeyFrames.xKeyFrames.isEmpty()) {
@@ -620,26 +672,11 @@ public class AnimationController<T extends IAnimatable> {
                         AnimationPoint yPoint = getAnimationPointAtTick(scaleKeyFrames.yKeyFrames, 0, false, Axis.Y);
                         AnimationPoint zPoint = getAnimationPointAtTick(scaleKeyFrames.zKeyFrames, 0, false, Axis.Z);
                         boneAnimationQueue.scaleXQueue.add(
-                            new AnimationPoint(
-                                null,
-                                tick,
-                                transitionLengthTicks,
-                                boneSnapshot.scaleValueX,
-                                xPoint.animationStartValue));
+                            transitionPoint(tick, boneSnapshot.scaleValueX, xPoint.animationStartValue));
                         boneAnimationQueue.scaleYQueue.add(
-                            new AnimationPoint(
-                                null,
-                                tick,
-                                transitionLengthTicks,
-                                boneSnapshot.scaleValueY,
-                                yPoint.animationStartValue));
+                            transitionPoint(tick, boneSnapshot.scaleValueY, yPoint.animationStartValue));
                         boneAnimationQueue.scaleZQueue.add(
-                            new AnimationPoint(
-                                null,
-                                tick,
-                                transitionLengthTicks,
-                                boneSnapshot.scaleValueZ,
-                                zPoint.animationStartValue));
+                            transitionPoint(tick, boneSnapshot.scaleValueZ, zPoint.animationStartValue));
                     }
                 }
             }
@@ -735,6 +772,9 @@ public class AnimationController<T extends IAnimatable> {
                 }
             }
             markActiveBoneAnimationQueue(boneAnimationQueue);
+            // See the note on the transition path above: the weight is the animation's own blend_weight, defaulting to
+            // 1 (AnimationPlayer:346 and its fallback at :318).
+            boneAnimationQueue.setBlendWeight(blendWeightOf(currentAnimation));
 
             VectorKeyFrameList<KeyFrame<IValue>> rotationKeyFrames = boneAnimation.rotationKeyFrames;
             VectorKeyFrameList<KeyFrame<IValue>> positionKeyFrames = boneAnimation.positionKeyFrames;
@@ -845,6 +885,28 @@ public class AnimationController<T extends IAnimatable> {
         for (IBone modelRenderer : modelRendererList) {
             boneAnimationQueues.put(modelRenderer.getName(), new BoneAnimationQueue(modelRenderer));
         }
+    }
+
+    /**
+     * The contribution weight of an animation, which is its own {@code blend_weight} expression or 1 when it declares
+     * none.
+     * <p>
+     * Upstream's rule, verbatim shape: {@code currentAnim.blendWeight != null ? currentAnim.blendWeight.evalAsFloat(
+     * evaluator) : 1} ({@code AnimationPlayer:318}, {@code :346}, {@code :365}). The expression is evaluated per frame
+     * rather than at load time because the packs use it as a live function of the animation clock - all thirteen
+     * declarations across the packs this engine loads are expressions, the most common being
+     * {@code 0.75*math.sin(query.anim_time*20)+1.5}, which is a breathing weight that only means anything once
+     * {@code query.anim_time} advances.
+     * <p>
+     * {@code MolangExpression} extends the engine's {@code IValue}, whose {@code get()} is the older runtime's
+     * evaluation entry point - the same runtime that parsed the animation, so the expression's variables resolve
+     * against the parser this controller is already processing with.
+     */
+    private static float blendWeightOf(Animation animation) {
+        if (animation == null || animation.blendWeight == null) {
+            return 1f;
+        }
+        return (float) animation.blendWeight.get();
     }
 
     private void markActiveBoneAnimationQueue(BoneAnimationQueue boneAnimationQueue) {
